@@ -540,6 +540,13 @@
         issues.push(`Roll-ID '${row.id}' rapporterade till sig själv. Länken togs bort.`);
         row.parentId = null;
       }
+
+      if (row.parentId && !byId.has(row.parentId)) {
+        issues.push(
+          `Roll-ID '${row.id}' rapporterade till okänd chef ('${row.parentId}'). Länken togs bort.`
+        );
+        row.parentId = null;
+      }
     });
 
     const visitState = new Map();
@@ -575,6 +582,15 @@
     }
 
     uniqueRows.forEach((row) => walk(row.id));
+
+    const hasRoot = uniqueRows.some((row) => !row.parentId);
+    if (!hasRoot && uniqueRows.length) {
+      const forcedRoot = uniqueRows[0];
+      issues.push(
+        `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
+      );
+      forcedRoot.parentId = null;
+    }
 
     return {
       rows: uniqueRows,
