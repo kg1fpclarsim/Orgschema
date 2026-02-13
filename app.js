@@ -69,6 +69,28 @@
     return [v];
   }
 
+  function normalizeHeaderKey(key) {
+    return norm(key).replace(/^\uFEFF/, "").toLowerCase();
+  }
+
+  function getField(row, ...candidates) {
+    if (!row || typeof row !== "object") return "";
+
+    const entries = Object.entries(row);
+    for (const candidate of candidates) {
+      const direct = row[candidate];
+      if (direct !== undefined && direct !== null && norm(direct)) return direct;
+
+      const wanted = normalizeHeaderKey(candidate);
+      const hit = entries.find(([k]) => normalizeHeaderKey(k) === wanted);
+      if (!hit) continue;
+      const [, value] = hit;
+      if (value !== undefined && value !== null && norm(value)) return value;
+    }
+
+    return "";
+  }
+
   function callIfFn(obj, name, ...args) {
     const fn = obj && obj[name];
     if (typeof fn === "function") {
@@ -461,6 +483,11 @@
     renderChart();
   }
 
+  function showHint(message) {
+    els.hint.textContent = message;
+    els.hint.style.display = "block";
+  }
+
   // Events
   els.fileInput.addEventListener("change", (e) => {
     const file = e.target.files && e.target.files[0];
@@ -468,22 +495,46 @@
 
     Papa.parse(file, {
       header: true,
+      delimiter: "",
       skipEmptyLines: true,
       complete: (res) => {
+        if (res.errors && res.errors.length) {
+          showHint("Kunde inte läsa CSV-filen. Kontrollera att filen är korrekt formaterad och försök igen.");
+          setControlsEnabled(false);
+          state.data = [];
+          state.filtered = [];
+          state.finalData = [];
+          renderChart();
+          return;
+        }
+
         const rows = (res.data || [])
           .map((r) => ({
-            id: norm(r["Roll-ID"]),
-            parentId: norm(r["Rapporterar till (Roll)"]) || null,
-            name: norm(r["Namn"]) || norm(r["Manuellt namn"]) || "(saknar namn)",
-            title: norm(r["Roll - Titel"]) || "(saknar titel)",
-            bolag: norm(r["Bolag"]),
-            plats: norm(r["Plats / Nivå"]),
-            trafik: norm(r["Trafikområde"]),
-            ansvar: parseMaybeList(r["Ansvarsområde"]),
-            sam: parseMaybeList(r["Fördelning SAM"]),
-            arbetsbeskrivning: norm(r["Arbetsbeskrivning"]),
+            id: norm(getField(r, "Roll-ID")),
+            parentId: norm(getField(r, "Rapporterar till (Roll)")) || null,
+            name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
+            title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
+            bolag: norm(getField(r, "Bolag")),
+            plats: norm(getField(r, "Plats / Nivå")),
+            trafik: norm(getField(r, "Trafikområde")),
+            ansvar: parseMaybeList(getField(r, "Ansvarsområde")),
+            sam: parseMaybeList(getField(r, "Fördelning SAM")),
+            arbetsbeskrivning: norm(getField(r, "Arbetsbeskrivning")),
           }))
           .filter((d) => d.id);
+
+        if (!rows.length) {
+          showHint(
+            "Inga giltiga rader hittades i CSV-filen. Kontrollera att kolumnen 'Roll-ID' finns och att separatorn är korrekt (komma eller semikolon)."
+          );
+          setControlsEnabled(false);
+          state.data = [];
+          state.filtered = [];
+          state.finalData = [];
+          renderChart();
+          closeDetails();
+          return;
+        }
 
         state.data = rows;
         state.q = "";
