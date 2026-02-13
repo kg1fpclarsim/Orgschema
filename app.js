@@ -53,6 +53,12 @@
     return (v ?? "").toString().trim();
   }
 
+  function sanitizeIdentifier(value) {
+    return norm(value)
+      .normalize("NFC")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "");
+  }
+
   function escapeHtml(s) {
     return (s ?? "")
       .toString()
@@ -370,8 +376,9 @@
           c.fit();
         } catch {}
       }, 0);
-    } catch {
+    } catch (error) {
       state.chart = null;
+      setRenderError(error);
       showHint("Kunde inte rita organisationsschemat med den inlästa datan.");
     }
   }
@@ -523,8 +530,20 @@
   function parseRows(rawRows) {
     return (rawRows || [])
       .map((r) => ({
-        id: norm(getField(r, "Roll-ID")),
-        parentId: norm(getField(r, "Rapporterar till (Roll)")) || null,
+        id: sanitizeIdentifier(
+          getField(r, "Roll-ID", "Roll ID", "ID", "Role-ID", "role-id")
+        ),
+        parentId:
+          sanitizeIdentifier(
+            getField(
+              r,
+              "Rapporterar till (Roll)",
+              "Rapporterar till Roll",
+              "Rapporterar till",
+              "Parent",
+              "Parent ID"
+            )
+          ) || null,
         name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
         title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
         bolag: norm(getField(r, "Bolag")),
@@ -569,38 +588,34 @@
     });
 
     const visitState = new Map();
-    const path = [];
+    const pathStack = [];
 
     function walk(id) {
-      const node = byId.get(id);
-      if (!node) return;
-
       const stateValue = visitState.get(id) || 0;
       if (stateValue === 2) return;
       if (stateValue === 1) {
-        const start = path.indexOf(id);
-        const cycle = start >= 0 ? path.slice(start).concat(id) : [id, id];
-        const cycleNodeId = cycle[0];
-        const cycleNode = byId.get(cycleNodeId);
-        if (cycleNode && cycleNode.parentId) {
-          issues.push(`Cykel hittades (${cycle.join(" → ")}). Länken för '${cycleNodeId}' togs bort.`);
-          cycleNode.parentId = null;
+        const cycleStart = pathStack.indexOf(id);
+        const cycle = cycleStart >= 0 ? pathStack.slice(cycleStart).concat(id) : [id, id];
+        const breakNodeId = cycle[0];
+        const breakNode = byId.get(breakNodeId);
+        if (breakNode && breakNode.parentId) {
+          issues.push(`Cykel hittades (${cycle.join(" → ")}). Länken för '${breakNodeId}' togs bort.`);
+          breakNode.parentId = null;
         }
         return;
       }
 
       visitState.set(id, 1);
-      path.push(id);
+      pathStack.push(id);
 
-      if (node.parentId && byId.has(node.parentId)) {
-        walk(node.parentId);
-      }
+      const node = byId.get(id);
+      if (node?.parentId && byId.has(node.parentId)) walk(node.parentId);
 
-      path.pop();
+      pathStack.pop();
       visitState.set(id, 2);
     }
 
-    uniqueRows.forEach((row) => walk(row.id));
+    Array.from(byId.keys()).forEach((id) => walk(id));
 
     const hasRoot = uniqueRows.some((row) => !row.parentId);
     if (!hasRoot && uniqueRows.length) {
@@ -681,7 +696,14 @@
     els.debugOutput.textContent = JSON.stringify(payload, null, 2);
   }
 
-  function buildDebugInfo({ fileName = "", parseResult = {}, parsedRows = [], sanitizedRows = [], issues = [] }) {
+  function buildDebugInfo({
+    fileName = "",
+    parseResult = {},
+    parsedRows = [],
+    sanitizedRows = [],
+    issues = [],
+    renderError = null,
+  }) {
     const errorList = (parseResult.errors || []).map((e) => ({
       code: e.code || "Unknown",
       message: e.message || "",
@@ -708,7 +730,19 @@
       issues,
       unresolvedParents,
       sampleIds: sanitizedRows.slice(0, 10).map((r) => r.id),
+      renderError,
     };
+  }
+
+  function setRenderError(error) {
+    if (!state.debug) return;
+    setDebugPayload({
+      ...state.debug,
+      renderError: {
+        message: error?.message || "Okänt renderingsfel",
+        stack: error?.stack || null,
+      },
+    });
   }
 
   // Events
