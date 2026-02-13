@@ -13,6 +13,8 @@
     filterTrafik: document.getElementById("filterTrafik"),
     colorBy: document.getElementById("colorBy"),
     palette: document.getElementById("palette"),
+    expandAllBtn: document.getElementById("expandAllBtn"),
+    collapseAllBtn: document.getElementById("collapseAllBtn"),
     fitBtn: document.getElementById("fitBtn"),
     pngBtn: document.getElementById("pngBtn"),
     pdfBtn: document.getElementById("pdfBtn"),
@@ -121,7 +123,19 @@
   }
 
   function setControlsEnabled(enabled) {
-    ["searchInput", "filterBolag", "filterPlats", "filterTrafik", "colorBy", "palette", "fitBtn", "pngBtn", "pdfBtn"].forEach(
+    [
+      "searchInput",
+      "filterBolag",
+      "filterPlats",
+      "filterTrafik",
+      "colorBy",
+      "palette",
+      "expandAllBtn",
+      "collapseAllBtn",
+      "fitBtn",
+      "pngBtn",
+      "pdfBtn",
+    ].forEach(
       (k) => (els[k].disabled = !enabled)
     );
     els.palette.disabled = !enabled || state.colorBy === "none";
@@ -846,6 +860,27 @@
       state.chart && state.chart.fit();
     } catch {}
   });
+
+  els.expandAllBtn.addEventListener("click", () => {
+    const c = state.chart;
+    if (!c) return;
+    if (callIfFn(c, "expandAll")) {
+      try {
+        c.fit();
+      } catch {}
+    }
+  });
+
+  els.collapseAllBtn.addEventListener("click", () => {
+    const c = state.chart;
+    if (!c) return;
+    if (callIfFn(c, "collapseAll")) {
+      try {
+        c.fit();
+      } catch {}
+    }
+  });
+
   els.pngBtn.addEventListener("click", () => exportPNG());
   els.pdfBtn.addEventListener("click", () => exportPDF());
 
