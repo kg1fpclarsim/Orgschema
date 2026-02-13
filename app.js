@@ -253,7 +253,18 @@
       return;
     }
 
-    const c = new OrgChartCtor();
+    let c;
+    try {
+      c = new OrgChartCtor();
+    } catch {
+      c = OrgChartCtor();
+    }
+
+    if (!c) {
+      showHint("Kunde inte initiera visualiseringsbiblioteket för organisationsschemat.");
+      return;
+    }
+
     c.container(`#${els.chart.id}`);
     c.data(state.finalData);
     c.nodeId((d) => d.id);
