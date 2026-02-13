@@ -518,6 +518,70 @@
       .filter((d) => d.id);
   }
 
+  function sanitizeHierarchyRows(rows) {
+    const issues = [];
+    const uniqueRows = [];
+    const seen = new Set();
+
+    (rows || []).forEach((row) => {
+      if (!row || !row.id) return;
+      if (seen.has(row.id)) {
+        issues.push(`Dubblett av Roll-ID '${row.id}' ignorerades.`);
+        return;
+      }
+      seen.add(row.id);
+      uniqueRows.push({ ...row });
+    });
+
+    const byId = new Map(uniqueRows.map((row) => [row.id, row]));
+
+    uniqueRows.forEach((row) => {
+      if (row.parentId && row.parentId === row.id) {
+        issues.push(`Roll-ID '${row.id}' rapporterade till sig själv. Länken togs bort.`);
+        row.parentId = null;
+      }
+    });
+
+    const visitState = new Map();
+    const path = [];
+
+    function walk(id) {
+      const node = byId.get(id);
+      if (!node) return;
+
+      const stateValue = visitState.get(id) || 0;
+      if (stateValue === 2) return;
+      if (stateValue === 1) {
+        const start = path.indexOf(id);
+        const cycle = start >= 0 ? path.slice(start).concat(id) : [id, id];
+        const cycleNodeId = cycle[0];
+        const cycleNode = byId.get(cycleNodeId);
+        if (cycleNode && cycleNode.parentId) {
+          issues.push(`Cykel hittades (${cycle.join(" → ")}). Länken för '${cycleNodeId}' togs bort.`);
+          cycleNode.parentId = null;
+        }
+        return;
+      }
+
+      visitState.set(id, 1);
+      path.push(id);
+
+      if (node.parentId && byId.has(node.parentId)) {
+        walk(node.parentId);
+      }
+
+      path.pop();
+      visitState.set(id, 2);
+    }
+
+    uniqueRows.forEach((row) => walk(row.id));
+
+    return {
+      rows: uniqueRows,
+      issues,
+    };
+  }
+
   function parseCsvWithFallback(file, onDone) {
     const delimiters = ["", ";", ",", "\t"];
     let index = 0;
@@ -555,7 +619,8 @@
     if (!file) return;
 
     parseCsvWithFallback(file, (res) => {
-      const rows = res.parsedRows || [];
+      const parsedRows = res.parsedRows || [];
+      const { rows, issues } = sanitizeHierarchyRows(parsedRows);
 
       if (!rows.length) {
         showHint(
@@ -582,8 +647,12 @@
       els.filterTrafik.value = "all";
 
       els.hint.style.display = "none";
-      if (res.errors && res.errors.length) {
-        showHint("CSV lästes in, men vissa rader kunde inte tolkas och ignorerades.");
+      if ((res.errors && res.errors.length) || issues.length) {
+        const details = issues.slice(0, 2).join(" ");
+        const more = issues.length > 2 ? ` (+${issues.length - 2} till)` : "";
+        showHint(
+          `CSV lästes in, men vissa rader behövde justeras för att kunna ritas. ${details}${more}`.trim()
+        );
       }
       setControlsEnabled(true);
       rebuildOptions();
