@@ -22,6 +22,8 @@
     detailsBody: document.getElementById("detailsBody"),
     detailsIdPill: document.getElementById("detailsIdPill"),
     closeDetails: document.getElementById("closeDetails"),
+    debugPanel: document.getElementById("debugPanel"),
+    debugOutput: document.getElementById("debugOutput"),
   };
 
   const COLOR_PRESETS = {
@@ -44,6 +46,7 @@
     palette: "tableau",
     showAllSam: false,
     showFullDesc: false,
+    debug: null,
   };
 
   function norm(v) {
@@ -661,6 +664,42 @@
     run();
   }
 
+  function setDebugPayload(payload) {
+    state.debug = payload;
+    if (!els.debugOutput) return;
+    els.debugOutput.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  function buildDebugInfo({ fileName = "", parseResult = {}, parsedRows = [], sanitizedRows = [], issues = [] }) {
+    const errorList = (parseResult.errors || []).map((e) => ({
+      code: e.code || "Unknown",
+      message: e.message || "",
+      row: e.row,
+    }));
+
+    const byId = new Set(sanitizedRows.map((r) => r.id));
+    const unresolvedParents = sanitizedRows
+      .filter((r) => r.parentId && !byId.has(r.parentId))
+      .map((r) => ({ id: r.id, parentId: r.parentId }));
+
+    return {
+      timestamp: new Date().toISOString(),
+      fileName,
+      counts: {
+        rawRows: parseResult.data?.length || 0,
+        parsedRows: parsedRows.length,
+        sanitizedRows: sanitizedRows.length,
+        issues: issues.length,
+        parserErrors: errorList.length,
+      },
+      roots: sanitizedRows.filter((r) => !r.parentId).map((r) => r.id),
+      parserErrors: errorList,
+      issues,
+      unresolvedParents,
+      sampleIds: sanitizedRows.slice(0, 10).map((r) => r.id),
+    };
+  }
+
   // Events
   els.fileInput.addEventListener("change", (e) => {
     const file = e.target.files && e.target.files[0];
@@ -671,6 +710,15 @@
       const { rows, issues } = sanitizeHierarchyRows(parsedRows);
 
       if (!rows.length) {
+        setDebugPayload(
+          buildDebugInfo({
+            fileName: file.name,
+            parseResult: res,
+            parsedRows,
+            sanitizedRows: rows,
+            issues,
+          })
+        );
         showHint(
           "Inga giltiga rader hittades i CSV-filen. Kontrollera att kolumnen 'Roll-ID' finns och att separatorn är korrekt (komma eller semikolon)."
         );
@@ -702,6 +750,17 @@
           `CSV lästes in, men vissa rader behövde justeras för att kunna ritas. ${details}${more}`.trim()
         );
       }
+
+      setDebugPayload(
+        buildDebugInfo({
+          fileName: file.name,
+          parseResult: res,
+          parsedRows,
+          sanitizedRows: rows,
+          issues,
+        })
+      );
+
       setControlsEnabled(true);
       rebuildOptions();
       refresh();
@@ -752,4 +811,5 @@
 
   // Start disabled until CSV loaded
   setControlsEnabled(false);
+  setDebugPayload({ info: "Ingen CSV laddad ännu." });
 })();
