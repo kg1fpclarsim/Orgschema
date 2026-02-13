@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Organisationsschema (lokal)</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-org-chart@3.1.1/build/d3-org-chart.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__title">
+      <h1>Organisationsschema</h1>
+      <p>Sök, filtrera, färgkoda och exportera PNG/PDF.</p>
+    </div>
+    <div class="pill">Lokal CSV</div>
+  </header>
+
+  <section class="controls card">
+    <div class="controls__row">
+      <label class="file">
+        <input id="fileInput" type="file" accept=".csv,text/csv" />
+        <span>Välj CSV…</span>
+      </label>
+
+      <div class="field">
+        <input id="searchInput" type="text" placeholder="Sök… (namn, titel, bolag, etc.)" disabled />
+      </div>
+
+      <div class="field">
+        <select id="filterBolag" disabled>
+          <option value="all">Alla bolag</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <select id="filterPlats" disabled>
+          <option value="all">Alla (Plats / Nivå)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <select id="filterTrafik" disabled>
+          <option value="all">Alla (Trafikområde)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <select id="colorBy" disabled>
+          <option value="branch">Färg: Gren (toppnivå)</option>
+          <option value="bolag">Färg: Bolag</option>
+          <option value="plats">Färg: Plats / Nivå</option>
+          <option value="trafik">Färg: Trafikområde</option>
+          <option value="none">Färg: Ingen</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <select id="palette" disabled>
+          <option value="tableau">Palett: Tableau</option>
+          <option value="set3">Palett: Set3</option>
+          <option value="pastel1">Palett: Pastell</option>
+        </select>
+      </div>
+
+      <div class="buttons">
+        <button id="fitBtn" class="btn" disabled>Passa in</button>
+        <button id="pngBtn" class="btn" disabled>Export PNG</button>
+        <button id="pdfBtn" class="btn" disabled>Export PDF</button>
+      </div>
+    </div>
+
+    <div id="hint" class="hint">
+      Ladda en CSV för att se visualisering. Kolumner: <b>Roll-ID</b>, <b>Rapporterar till (Roll)</b>,
+      <b>Namn</b>/<b>Manuellt namn</b>, <b>Roll - Titel</b>, <b>Bolag</b>, <b>Plats / Nivå</b>, <b>Trafikområde</b>,
+      <b>Arbetsbeskrivning</b>, <b>Ansvarsområde</b>, <b>Fördelning SAM</b>.
+    </div>
+  </section>
+
+  <main class="main">
+    <section class="card chartCard">
+      <div id="chart" class="chart"></div>
+      <div class="chartHelp">Tips: dra för att panorera • scrolla för att zooma • använd den större <b>+/−</b>-knappen på noderna</div>
+    </section>
+  </main>
+
+  <aside id="detailsOverlay" class="overlay" aria-hidden="true">
+    <div class="overlay__panel card">
+      <div class="overlay__header">
+        <div class="overlay__title">
+          <h2>Detaljer</h2>
+          <span id="detailsIdPill" class="pill pill--muted"></span>
+        </div>
+        <button id="closeDetails" class="btn btn--ghost">Stäng</button>
+      </div>
+      <div id="detailsBody" class="overlay__body"></div>
+    </div>
+  </aside>
+
+  <script src="app.js"></script>
+</body>
+</html>

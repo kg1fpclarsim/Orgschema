@@ -1,0 +1,551 @@
+/* global Papa, d3, d3OrgChart, htmlToImage, jspdf */
+(() => {
+  const { OrgChart } = d3OrgChart;
+
+  const els = {
+    fileInput: document.getElementById("fileInput"),
+    searchInput: document.getElementById("searchInput"),
+    filterBolag: document.getElementById("filterBolag"),
+    filterPlats: document.getElementById("filterPlats"),
+    filterTrafik: document.getElementById("filterTrafik"),
+    colorBy: document.getElementById("colorBy"),
+    palette: document.getElementById("palette"),
+    fitBtn: document.getElementById("fitBtn"),
+    pngBtn: document.getElementById("pngBtn"),
+    pdfBtn: document.getElementById("pdfBtn"),
+    hint: document.getElementById("hint"),
+    chart: document.getElementById("chart"),
+    overlay: document.getElementById("detailsOverlay"),
+    detailsBody: document.getElementById("detailsBody"),
+    detailsIdPill: document.getElementById("detailsIdPill"),
+    closeDetails: document.getElementById("closeDetails"),
+  };
+
+  const COLOR_PRESETS = {
+    tableau: d3.schemeTableau10,
+    set3: d3.schemeSet3,
+    pastel1: d3.schemePastel1,
+  };
+
+  const state = {
+    data: [],
+    filtered: [],
+    finalData: [],
+    selected: null,
+    chart: null,
+    q: "",
+    bolag: "all",
+    plats: "all",
+    trafik: "all",
+    colorBy: "branch",
+    palette: "tableau",
+    showAllSam: false,
+    showFullDesc: false,
+  };
+
+  function norm(v) {
+    return (v ?? "").toString().trim();
+  }
+
+  function escapeHtml(s) {
+    return (s ?? "")
+      .toString()
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function parseMaybeList(value) {
+    const v = norm(value);
+    if (!v) return [];
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed)) return parsed.map((x) => norm(x)).filter(Boolean);
+    } catch {}
+    if (v.includes(";")) return v.split(";").map((x) => x.trim()).filter(Boolean);
+    if (v.includes(",")) return v.split(",").map((x) => x.trim()).filter(Boolean);
+    return [v];
+  }
+
+  function callIfFn(obj, name, ...args) {
+    const fn = obj && obj[name];
+    if (typeof fn === "function") {
+      fn.apply(obj, args);
+      return true;
+    }
+    return false;
+  }
+
+  function ts() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(
+      d.getMinutes()
+    )}${pad(d.getSeconds())}`;
+  }
+
+  function setControlsEnabled(enabled) {
+    ["searchInput", "filterBolag", "filterPlats", "filterTrafik", "colorBy", "palette", "fitBtn", "pngBtn", "pdfBtn"].forEach(
+      (k) => (els[k].disabled = !enabled)
+    );
+    els.palette.disabled = !enabled || state.colorBy === "none";
+  }
+
+  function uniqSorted(arr) {
+    return Array.from(new Set(arr.filter(Boolean))).sort((a, b) => a.localeCompare(b, "sv"));
+  }
+
+  function fillSelect(sel, allOpt, values) {
+    sel.innerHTML = "";
+    const o0 = document.createElement("option");
+    o0.value = allOpt[0];
+    o0.textContent = allOpt[1];
+    sel.appendChild(o0);
+    values.forEach((v) => {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = v;
+      sel.appendChild(o);
+    });
+  }
+
+  function rebuildOptions() {
+    fillSelect(els.filterBolag, ["all", "Alla bolag"], uniqSorted(state.data.map((d) => d.bolag)));
+    fillSelect(els.filterPlats, ["all", "Alla (Plats / Nivå)"], uniqSorted(state.data.map((d) => d.plats)));
+    fillSelect(els.filterTrafik, ["all", "Alla (Trafikområde)"], uniqSorted(state.data.map((d) => d.trafik)));
+  }
+
+  function applyFilters() {
+    const qq = state.q.toLowerCase();
+    state.filtered = state.data.filter((d) => {
+      if (state.bolag !== "all" && d.bolag !== state.bolag) return false;
+      if (state.plats !== "all" && d.plats !== state.plats) return false;
+      if (state.trafik !== "all" && d.trafik !== state.trafik) return false;
+      if (!qq) return true;
+
+      const hay = [
+        d.id,
+        d.parentId,
+        d.name,
+        d.title,
+        d.bolag,
+        d.plats,
+        d.trafik,
+        ...(d.ansvar || []),
+        ...(d.sam || []),
+        d.arbetsbeskrivning,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(qq);
+    });
+  }
+
+  function keepAncestors() {
+    if (!state.data.length) return [];
+    if (!state.filtered.length) return [];
+    const byId = new Map(state.data.map((d) => [d.id, d]));
+    const keep = new Set();
+
+    state.filtered.forEach((d) => {
+      let cur = d;
+      while (cur) {
+        if (keep.has(cur.id)) break;
+        keep.add(cur.id);
+        cur = cur.parentId ? byId.get(cur.parentId) || null : null;
+      }
+    });
+
+    return state.data.filter((d) => keep.has(d.id));
+  }
+
+  function makeColorState() {
+    const rows = state.finalData;
+    const byId = new Map(rows.map((d) => [d.id, d]));
+    const roots = rows.filter((d) => !d.parentId || !byId.has(d.parentId));
+    const root = roots[0] || null;
+
+    function depth1AncestorId(id) {
+      if (!root) return id;
+      let cur = byId.get(id);
+      if (!cur) return id;
+      while (cur.parentId && byId.has(cur.parentId)) {
+        const p = byId.get(cur.parentId);
+        if (!p) break;
+        if (p.id === root.id) return cur.id;
+        cur = p;
+      }
+      return cur.id;
+    }
+
+    const keyFn = (d) => {
+      if (state.colorBy === "none") return "";
+      if (state.colorBy === "bolag") return d.bolag || "(saknar bolag)";
+      if (state.colorBy === "plats") return d.plats || "(saknar plats)";
+      if (state.colorBy === "trafik") return d.trafik || "(saknar trafik)";
+      const bId = depth1AncestorId(d.id);
+      const b = byId.get(bId);
+      return (b?.name || b?.title || bId || "gren").toString();
+    };
+
+    const colors = COLOR_PRESETS[state.palette] || COLOR_PRESETS.tableau;
+    const uniqKeys = Array.from(new Set(rows.map(keyFn).filter(Boolean)));
+    const map = new Map();
+    uniqKeys.forEach((k, i) => map.set(k, colors[i % colors.length]));
+
+    const colorFor = (d) => {
+      if (state.colorBy === "none") return { stripe: "#CBD5E1", soft: "rgba(203,213,225,.20)", key: "" };
+      const key = keyFn(d);
+      const stripe = map.get(key) || "#94A3B8";
+      const c = d3.color(stripe);
+      const soft = c ? c.copy({ opacity: 0.12 }).formatRgb() : "rgba(148,163,184,.12)";
+      return { stripe, soft, key };
+    };
+
+    return { colorFor };
+  }
+
+  function renderChart() {
+    els.chart.innerHTML = "";
+    if (!state.finalData.length) {
+      state.chart = null;
+      return;
+    }
+
+    const colorState = makeColorState();
+
+    const c = new OrgChart();
+    c.container(els.chart);
+    c.data(state.finalData);
+    c.nodeId((d) => d.id);
+    c.parentNodeId((d) => d.parentId);
+
+    callIfFn(c, "svgHeight", 640);
+    callIfFn(c, "nodeWidth", () => 260);
+    callIfFn(c, "nodeHeight", () => 150);
+    callIfFn(c, "childrenMargin", () => 60);
+    callIfFn(c, "compactMarginBetween", () => 45);
+    callIfFn(c, "compactMarginPair", () => 30);
+
+    callIfFn(c, "linkUpdate", function (d) {
+      const child = d.data?.data || d.data;
+      const cc = colorState.colorFor(child);
+      d3.select(this).attr("stroke", cc?.stripe || "#CBD5E1").attr("stroke-width", 2).attr("stroke-opacity", 0.55);
+    });
+
+    callIfFn(c, "buttonContent", ({ node }) => {
+      const isExpanded = !!node.children;
+      const cnt = node.data?._directSubordinates ?? node.data?._totalSubordinates ?? "";
+      const cc = colorState.colorFor(node.data);
+      return `
+        <div style="
+          display:flex;align-items:center;gap:8px;
+          padding:6px 10px;border-radius:999px;
+          border:1px solid ${cc.stripe};background:white;
+          box-shadow:0 10px 24px rgba(15,23,42,.10);
+          color:#0f172a;font-size:12px;font-weight:800;
+        ">
+          <span style="
+            width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;
+            border-radius:999px;background:${cc.soft};border:1px solid ${cc.stripe};
+          ">${isExpanded ? "−" : "+"}</span>
+          <span style="opacity:.9">${cnt || ""}</span>
+        </div>
+      `;
+    });
+
+    callIfFn(c, "nodeContent", (d) => {
+      const row = d.data;
+      const cc = colorState.colorFor(row);
+
+      const platsLine = row.plats
+        ? `<div style="font-size:12px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(
+            row.plats
+          )}</div>`
+        : "";
+
+      const trafikLine = row.trafik
+        ? `<div style="font-size:12px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(
+            row.trafik
+          )}</div>`
+        : "";
+
+      const bolagFooter = row.bolag
+        ? `<div style="
+              margin-top:auto;font-size:11px;color:${cc.stripe};
+              display:flex;justify-content:flex-end;
+              white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+            ">${escapeHtml(row.bolag)}</div>`
+        : `<div style="margin-top:auto;font-size:11px;">&nbsp;</div>`;
+
+      return `
+        <div style="
+          width:${d.width}px;height:${d.height}px;
+          position:relative;border-radius:18px;
+          border:1px solid rgba(15,23,42,.12);
+          background:white;box-shadow:0 16px 40px rgba(15,23,42,.10);
+          overflow:hidden;
+        ">
+          <div style="position:absolute;inset:0 auto 0 0;width:10px;background:${cc.stripe};"></div>
+
+          <div style="position:absolute;left:12px;right:12px;top:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;">
+            <div style="font-weight:900;font-size:14px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              ${escapeHtml(row.name)}
+            </div>
+
+            <div style="font-size:12px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              ${escapeHtml(row.title)}
+            </div>
+
+            ${platsLine}
+            ${trafikLine}
+
+            ${bolagFooter}
+          </div>
+
+          <div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:12px;height:12px;border-radius:999px;background:white;border:2px solid rgba(15,23,42,.16);"></div>
+          <div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);width:12px;height:12px;border-radius:999px;background:white;border:2px solid rgba(15,23,42,.16);"></div>
+        </div>
+      `;
+    });
+
+    callIfFn(c, "onNodeClick", (d) => openDetails(d.data));
+
+    c.render();
+    state.chart = c;
+    setTimeout(() => {
+      try {
+        c.fit();
+      } catch {}
+    }, 0);
+  }
+
+  function openDetails(row) {
+    state.selected = row;
+    state.showAllSam = false;
+    state.showFullDesc = false;
+    els.detailsIdPill.textContent = row?.id || "";
+    renderDetails();
+    els.overlay.setAttribute("aria-hidden", "false");
+  }
+
+  function closeDetails() {
+    state.selected = null;
+    els.overlay.setAttribute("aria-hidden", "true");
+    els.detailsBody.innerHTML = "";
+    els.detailsIdPill.textContent = "";
+  }
+
+  function clampText(text, lines) {
+    const safe = escapeHtml(text || "-");
+    return `<div class="v" style="
+      white-space:pre-wrap;
+      overflow:hidden;
+      display:-webkit-box;
+      -webkit-line-clamp:${lines};
+      -webkit-box-orient:vertical;
+    ">${safe}</div>`;
+  }
+
+  function renderDetails() {
+    const r = state.selected;
+    if (!r) return;
+
+    const sam = Array.isArray(r.sam) ? r.sam : [];
+    const ansvar = Array.isArray(r.ansvar) ? r.ansvar : [];
+
+    const desc = r.arbetsbeskrivning || "";
+    const descNeedsToggle = desc.length > 220;
+    const samNeedsToggle = sam.length > 4;
+
+    const descHtml = state.showFullDesc
+      ? `<div class="v" style="white-space:pre-wrap;">${escapeHtml(desc || "-")}</div>`
+      : clampText(desc || "-", 5);
+
+    const samList = state.showAllSam || !samNeedsToggle ? sam : sam.slice(0, 4);
+
+    els.detailsBody.innerHTML = `
+      <div class="kv"><div class="k">Namn</div><div class="v" style="font-weight:800;">${escapeHtml(r.name)}</div></div>
+      <div class="kv"><div class="k">Titel</div><div class="v">${escapeHtml(r.title)}</div></div>
+      <div class="kv"><div class="k">Bolag</div><div class="v">${escapeHtml(r.bolag || "-")}</div></div>
+      <div class="kv"><div class="k">Plats / Nivå</div><div class="v">${escapeHtml(r.plats || "-")}</div></div>
+      <div class="kv"><div class="k">Trafikområde</div><div class="v">${escapeHtml(r.trafik || "-")}</div></div>
+
+      <div class="kv">
+        <div class="k">Ansvarsområde</div>
+        <div class="badges">
+          ${
+            ansvar.length ? ansvar.map((a) => `<span class="badge">${escapeHtml(a)}</span>`).join("") : `<span class="small">-</span>`
+          }
+        </div>
+      </div>
+
+      <div class="kv">
+        <div class="toggleRow">
+          <div class="k">Arbetsbeskrivning</div>
+          ${descNeedsToggle ? `<button id="toggleDesc" class="toggleBtn">${state.showFullDesc ? "Visa mindre" : "Visa mer"}</button>` : ""}
+        </div>
+        ${descHtml}
+      </div>
+
+      <div class="kv">
+        <div class="toggleRow">
+          <div class="k">Fördelning SAM</div>
+          ${
+            samNeedsToggle
+              ? `<button id="toggleSam" class="toggleBtn">${state.showAllSam ? "Visa mindre" : `Visa alla (${sam.length})`}</button>`
+              : ""
+          }
+        </div>
+        <ul class="list">
+          ${
+            samList.length
+              ? samList.map((s) => `<li>${escapeHtml(s)}</li>`).join("")
+              : `<li class="small" style="list-style:none;">-</li>`
+          }
+        </ul>
+        ${!state.showAllSam && samNeedsToggle ? `<div class="small">Visar 4 av ${sam.length}</div>` : ""}
+      </div>
+
+      <div class="small">ID: <code>${escapeHtml(r.id)}</code></div>
+    `;
+
+    const tDesc = document.getElementById("toggleDesc");
+    if (tDesc) tDesc.addEventListener("click", () => ((state.showFullDesc = !state.showFullDesc), renderDetails()));
+
+    const tSam = document.getElementById("toggleSam");
+    if (tSam) tSam.addEventListener("click", () => ((state.showAllSam = !state.showAllSam), renderDetails()));
+  }
+
+  async function exportPNG() {
+    const node = els.chart;
+    const dataUrl = await htmlToImage.toPng(node, { pixelRatio: 2, cacheBust: true });
+    const a = document.createElement("a");
+    a.download = `organisationsschema_${ts()}.png`;
+    a.href = dataUrl;
+    a.click();
+  }
+
+  async function exportPDF() {
+    const node = els.chart;
+    const dataUrl = await htmlToImage.toPng(node, { pixelRatio: 2, cacheBust: true });
+
+    const img = new Image();
+    img.src = dataUrl;
+    await img.decode();
+
+    const { jsPDF } = jspdf;
+    const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+
+    const margin = 18;
+    const maxW = pageW - margin * 2;
+    const maxH = pageH - margin * 2;
+
+    const ratio = Math.min(maxW / img.width, maxH / img.height);
+    const w = img.width * ratio;
+    const h = img.height * ratio;
+    const x = (pageW - w) / 2;
+    const y = (pageH - h) / 2;
+
+    pdf.addImage(dataUrl, "PNG", x, y, w, h, undefined, "FAST");
+    pdf.save(`organisationsschema_${ts()}.pdf`);
+  }
+
+  function refresh() {
+    applyFilters();
+    state.finalData = keepAncestors();
+    renderChart();
+  }
+
+  // Events
+  els.fileInput.addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (res) => {
+        const rows = (res.data || [])
+          .map((r) => ({
+            id: norm(r["Roll-ID"]),
+            parentId: norm(r["Rapporterar till (Roll)"]) || null,
+            name: norm(r["Namn"]) || norm(r["Manuellt namn"]) || "(saknar namn)",
+            title: norm(r["Roll - Titel"]) || "(saknar titel)",
+            bolag: norm(r["Bolag"]),
+            plats: norm(r["Plats / Nivå"]),
+            trafik: norm(r["Trafikområde"]),
+            ansvar: parseMaybeList(r["Ansvarsområde"]),
+            sam: parseMaybeList(r["Fördelning SAM"]),
+            arbetsbeskrivning: norm(r["Arbetsbeskrivning"]),
+          }))
+          .filter((d) => d.id);
+
+        state.data = rows;
+        state.q = "";
+        state.bolag = "all";
+        state.plats = "all";
+        state.trafik = "all";
+
+        els.searchInput.value = "";
+        els.filterBolag.value = "all";
+        els.filterPlats.value = "all";
+        els.filterTrafik.value = "all";
+
+        els.hint.style.display = "none";
+        setControlsEnabled(true);
+        rebuildOptions();
+        refresh();
+        closeDetails();
+      },
+    });
+  });
+
+  els.searchInput.addEventListener("input", (e) => {
+    state.q = e.target.value || "";
+    refresh();
+  });
+  els.filterBolag.addEventListener("change", (e) => {
+    state.bolag = e.target.value;
+    refresh();
+  });
+  els.filterPlats.addEventListener("change", (e) => {
+    state.plats = e.target.value;
+    refresh();
+  });
+  els.filterTrafik.addEventListener("change", (e) => {
+    state.trafik = e.target.value;
+    refresh();
+  });
+
+  els.colorBy.addEventListener("change", (e) => {
+    state.colorBy = e.target.value;
+    els.palette.disabled = state.colorBy === "none";
+    refresh();
+  });
+
+  els.palette.addEventListener("change", (e) => {
+    state.palette = e.target.value;
+    refresh();
+  });
+
+  els.fitBtn.addEventListener("click", () => {
+    try {
+      state.chart && state.chart.fit();
+    } catch {}
+  });
+  els.pngBtn.addEventListener("click", () => exportPNG());
+  els.pdfBtn.addEventListener("click", () => exportPDF());
+
+  els.closeDetails.addEventListener("click", () => closeDetails());
+  els.overlay.addEventListener("click", (e) => {
+    if (e.target === els.overlay) closeDetails();
+  });
+
+  // Start disabled until CSV loaded
+  setControlsEnabled(false);
+})();
