@@ -1,6 +1,9 @@
-/* global Papa, d3, d3OrgChart, htmlToImage, jspdf */
+/* global Papa, d3, d3OrgChart, OrgChart, htmlToImage, jspdf */
 (() => {
-  const { OrgChart } = d3OrgChart;
+  const OrgChartCtor =
+    (typeof d3OrgChart !== "undefined" && d3OrgChart && d3OrgChart.OrgChart) ||
+    (typeof d3 !== "undefined" && d3 && d3.OrgChart) ||
+    (typeof OrgChart !== "undefined" ? OrgChart : null);
 
   const els = {
     fileInput: document.getElementById("fileInput"),
@@ -238,7 +241,12 @@
 
     const colorState = makeColorState();
 
-    const c = new OrgChart();
+    if (!OrgChartCtor) {
+      showHint("Visualiseringsbiblioteket kunde inte laddas. Kontrollera nätverk/brandvägg och ladda om sidan.");
+      return;
+    }
+
+    const c = new OrgChartCtor();
     c.container(els.chart);
     c.data(state.finalData);
     c.nodeId((d) => d.id);
@@ -335,13 +343,18 @@
 
     callIfFn(c, "onNodeClick", (d) => openDetails(d.data));
 
-    c.render();
-    state.chart = c;
-    setTimeout(() => {
-      try {
-        c.fit();
-      } catch {}
-    }, 0);
+    try {
+      c.render();
+      state.chart = c;
+      setTimeout(() => {
+        try {
+          c.fit();
+        } catch {}
+      }, 0);
+    } catch {
+      state.chart = null;
+      showHint("Kunde inte rita organisationsschemat med den inlästa datan.");
+    }
   }
 
   function openDetails(row) {
@@ -488,71 +501,94 @@
     els.hint.style.display = "block";
   }
 
+  function parseRows(rawRows) {
+    return (rawRows || [])
+      .map((r) => ({
+        id: norm(getField(r, "Roll-ID")),
+        parentId: norm(getField(r, "Rapporterar till (Roll)")) || null,
+        name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
+        title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
+        bolag: norm(getField(r, "Bolag")),
+        plats: norm(getField(r, "Plats / Nivå")),
+        trafik: norm(getField(r, "Trafikområde")),
+        ansvar: parseMaybeList(getField(r, "Ansvarsområde")),
+        sam: parseMaybeList(getField(r, "Fördelning SAM")),
+        arbetsbeskrivning: norm(getField(r, "Arbetsbeskrivning")),
+      }))
+      .filter((d) => d.id);
+  }
+
+  function parseCsvWithFallback(file, onDone) {
+    const delimiters = ["", ";", ",", "\t"];
+    let index = 0;
+
+    function run() {
+      const delimiter = delimiters[index++];
+      Papa.parse(file, {
+        header: true,
+        delimiter,
+        skipEmptyLines: true,
+        complete: (res) => {
+          const rows = parseRows(res.data);
+          const hasFatalErrors = (res.errors || []).some((e) => e.code === "UndetectableDelimiter");
+
+          if (rows.length || index >= delimiters.length || !hasFatalErrors) {
+            onDone({ ...res, parsedRows: rows });
+            return;
+          }
+
+          run();
+        },
+        error: () => {
+          if (index < delimiters.length) return run();
+          onDone({ data: [], errors: [{ code: "ReadError" }], parsedRows: [] });
+        },
+      });
+    }
+
+    run();
+  }
+
   // Events
   els.fileInput.addEventListener("change", (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
-    Papa.parse(file, {
-      header: true,
-      delimiter: "",
-      skipEmptyLines: true,
-      complete: (res) => {
-        if (res.errors && res.errors.length) {
-          showHint("Kunde inte läsa CSV-filen. Kontrollera att filen är korrekt formaterad och försök igen.");
-          setControlsEnabled(false);
-          state.data = [];
-          state.filtered = [];
-          state.finalData = [];
-          renderChart();
-          return;
-        }
+    parseCsvWithFallback(file, (res) => {
+      const rows = res.parsedRows || [];
 
-        const rows = (res.data || [])
-          .map((r) => ({
-            id: norm(getField(r, "Roll-ID")),
-            parentId: norm(getField(r, "Rapporterar till (Roll)")) || null,
-            name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
-            title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
-            bolag: norm(getField(r, "Bolag")),
-            plats: norm(getField(r, "Plats / Nivå")),
-            trafik: norm(getField(r, "Trafikområde")),
-            ansvar: parseMaybeList(getField(r, "Ansvarsområde")),
-            sam: parseMaybeList(getField(r, "Fördelning SAM")),
-            arbetsbeskrivning: norm(getField(r, "Arbetsbeskrivning")),
-          }))
-          .filter((d) => d.id);
-
-        if (!rows.length) {
-          showHint(
-            "Inga giltiga rader hittades i CSV-filen. Kontrollera att kolumnen 'Roll-ID' finns och att separatorn är korrekt (komma eller semikolon)."
-          );
-          setControlsEnabled(false);
-          state.data = [];
-          state.filtered = [];
-          state.finalData = [];
-          renderChart();
-          closeDetails();
-          return;
-        }
-
-        state.data = rows;
-        state.q = "";
-        state.bolag = "all";
-        state.plats = "all";
-        state.trafik = "all";
-
-        els.searchInput.value = "";
-        els.filterBolag.value = "all";
-        els.filterPlats.value = "all";
-        els.filterTrafik.value = "all";
-
-        els.hint.style.display = "none";
-        setControlsEnabled(true);
-        rebuildOptions();
-        refresh();
+      if (!rows.length) {
+        showHint(
+          "Inga giltiga rader hittades i CSV-filen. Kontrollera att kolumnen 'Roll-ID' finns och att separatorn är korrekt (komma eller semikolon)."
+        );
+        setControlsEnabled(false);
+        state.data = [];
+        state.filtered = [];
+        state.finalData = [];
+        renderChart();
         closeDetails();
-      },
+        return;
+      }
+
+      state.data = rows;
+      state.q = "";
+      state.bolag = "all";
+      state.plats = "all";
+      state.trafik = "all";
+
+      els.searchInput.value = "";
+      els.filterBolag.value = "all";
+      els.filterPlats.value = "all";
+      els.filterTrafik.value = "all";
+
+      els.hint.style.display = "none";
+      if (res.errors && res.errors.length) {
+        showHint("CSV lästes in, men vissa rader kunde inte tolkas och ignorerades.");
+      }
+      setControlsEnabled(true);
+      rebuildOptions();
+      refresh();
+      closeDetails();
     });
   });
 
