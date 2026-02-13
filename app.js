@@ -232,6 +232,10 @@
     return { colorFor };
   }
 
+  function unwrapNodeData(nodeLike) {
+    return nodeLike?.data?.data || nodeLike?.data || nodeLike || {};
+  }
+
   function renderChart() {
     els.chart.innerHTML = "";
     if (!state.finalData.length) {
@@ -247,7 +251,7 @@
     }
 
     const c = new OrgChartCtor();
-    c.container(els.chart);
+    c.container(`#${els.chart.id}`);
     c.data(state.finalData);
     c.nodeId((d) => d.id);
     c.parentNodeId((d) => d.parentId);
@@ -266,9 +270,10 @@
     });
 
     callIfFn(c, "buttonContent", ({ node }) => {
+      const row = unwrapNodeData(node);
       const isExpanded = !!node.children;
       const cnt = node.data?._directSubordinates ?? node.data?._totalSubordinates ?? "";
-      const cc = colorState.colorFor(node.data);
+      const cc = colorState.colorFor(row);
       return `
         <div style="
           display:flex;align-items:center;gap:8px;
@@ -287,7 +292,7 @@
     });
 
     callIfFn(c, "nodeContent", (d) => {
-      const row = d.data;
+      const row = unwrapNodeData(d);
       const cc = colorState.colorFor(row);
 
       const platsLine = row.plats
@@ -341,7 +346,7 @@
       `;
     });
 
-    callIfFn(c, "onNodeClick", (d) => openDetails(d.data));
+    callIfFn(c, "onNodeClick", (d) => openDetails(unwrapNodeData(d)));
 
     try {
       c.render();
@@ -590,6 +595,33 @@
         `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
       );
       forcedRoot.parentId = null;
+    }
+
+    const roots = uniqueRows.filter((row) => !row.parentId);
+    if (roots.length > 1) {
+      let syntheticId = "__virtual_root__";
+      while (byId.has(syntheticId)) syntheticId += "_x";
+
+      roots.forEach((row) => {
+        row.parentId = syntheticId;
+      });
+
+      uniqueRows.unshift({
+        id: syntheticId,
+        parentId: null,
+        name: "Organisation",
+        title: "Automatisk rotnod",
+        bolag: "",
+        plats: "",
+        trafik: "",
+        ansvar: [],
+        sam: [],
+        arbetsbeskrivning: "",
+      });
+
+      issues.push(
+        `Flera rotnoder hittades (${roots.length}). En virtuell rotnod lades till så att schemat kan ritas.`
+      );
     }
 
     return {
