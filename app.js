@@ -49,6 +49,7 @@
     showAllSam: false,
     showFullDesc: false,
     debug: null,
+    connections: [],
   };
 
   function norm(v) {
@@ -289,6 +290,7 @@
     c.data(state.finalData);
     c.nodeId((d) => d.id);
     c.parentNodeId((d) => d.parentId);
+    callIfFn(c, "connections", state.connections || []);
 
     callIfFn(c, "svgHeight", 640);
     callIfFn(c, "nodeWidth", () => 260);
@@ -543,30 +545,36 @@
 
   function parseRows(rawRows) {
     return (rawRows || [])
-      .map((r) => ({
-        id: sanitizeIdentifier(
-          getField(r, "Roll-ID", "Roll ID", "ID", "Role-ID", "role-id")
-        ),
-        parentId:
-          sanitizeIdentifier(
-            getField(
-              r,
-              "Rapporterar till (Roll)",
-              "Rapporterar till Roll",
-              "Rapporterar till",
-              "Parent",
-              "Parent ID"
-            )
-          ) || null,
-        name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
-        title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
-        bolag: norm(getField(r, "Bolag")),
-        plats: norm(getField(r, "Plats / Nivå")),
-        trafik: norm(getField(r, "Trafikområde")),
-        ansvar: parseMaybeList(getField(r, "Ansvarsområde")),
-        sam: parseMaybeList(getField(r, "Fördelning SAM")),
-        arbetsbeskrivning: norm(getField(r, "Arbetsbeskrivning")),
-      }))
+      .map((r) => {
+        const parentRaw = getField(
+          r,
+          "Rapporterar till (Roll)",
+          "Rapporterar till Roll",
+          "Rapporterar till",
+          "Parent",
+          "Parent ID"
+        );
+
+        const parentIds = Array.from(
+          new Set(parseMaybeList(parentRaw).map((x) => sanitizeIdentifier(x)).filter(Boolean))
+        );
+
+        return {
+          id: sanitizeIdentifier(
+            getField(r, "Roll-ID", "Roll ID", "ID", "Role-ID", "role-id")
+          ),
+          parentId: parentIds[0] || null,
+          parentIds,
+          name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
+          title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
+          bolag: norm(getField(r, "Bolag")),
+          plats: norm(getField(r, "Plats / Nivå")),
+          trafik: norm(getField(r, "Trafikområde")),
+          ansvar: parseMaybeList(getField(r, "Ansvarsområde")),
+          sam: parseMaybeList(getField(r, "Fördelning SAM")),
+          arbetsbeskrivning: norm(getField(r, "Arbetsbeskrivning")),
+        };
+      })
       .filter((d) => d.id);
   }
 
@@ -586,18 +594,41 @@
     });
 
     const byId = new Map(uniqueRows.map((row) => [row.id, row]));
+    const connections = [];
 
     uniqueRows.forEach((row) => {
-      if (row.parentId && row.parentId === row.id) {
+      const rawParentIds = Array.isArray(row.parentIds)
+        ? row.parentIds
+        : row.parentId
+          ? [row.parentId]
+          : [];
+
+      const parentIds = Array.from(new Set(rawParentIds.map((x) => sanitizeIdentifier(x)).filter(Boolean)));
+      const validParents = parentIds.filter((parentId) => parentId !== row.id && byId.has(parentId));
+
+      if (parentIds.some((parentId) => parentId === row.id)) {
         issues.push(`Roll-ID '${row.id}' rapporterade till sig själv. Länken togs bort.`);
-        row.parentId = null;
       }
 
-      if (row.parentId && !byId.has(row.parentId)) {
+      parentIds.forEach((parentId) => {
+        if (parentId !== row.id && !byId.has(parentId)) {
+          issues.push(
+            `Roll-ID '${row.id}' rapporterade till okänd chef ('${parentId}'). Länken togs bort.`
+          );
+        }
+      });
+
+      row.parentIds = validParents;
+      row.parentId = validParents[0] || null;
+
+      if (validParents.length > 1) {
+        validParents.slice(1).forEach((extraParentId) => {
+          connections.push({ from: extraParentId, to: row.id });
+        });
+
         issues.push(
-          `Roll-ID '${row.id}' rapporterade till okänd chef ('${row.parentId}'). Länken togs bort.`
+          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Extra kopplingar ritades som sidolänkar.`
         );
-        row.parentId = null;
       }
     });
 
@@ -615,6 +646,7 @@
         if (breakNode && breakNode.parentId) {
           issues.push(`Cykel hittades (${cycle.join(" → ")}). Länken för '${breakNodeId}' togs bort.`);
           breakNode.parentId = null;
+          breakNode.parentIds = [];
         }
         return;
       }
@@ -638,6 +670,7 @@
         `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
       );
       forcedRoot.parentId = null;
+      forcedRoot.parentIds = [];
     }
 
     const roots = uniqueRows.filter((row) => !row.parentId);
@@ -652,6 +685,7 @@
       uniqueRows.unshift({
         id: syntheticId,
         parentId: null,
+        parentIds: [],
         name: "Organisation",
         title: "Automatisk rotnod",
         bolag: "",
@@ -670,6 +704,7 @@
     return {
       rows: uniqueRows,
       issues,
+      connections,
     };
   }
 
@@ -766,7 +801,7 @@
 
     parseCsvWithFallback(file, (res) => {
       const parsedRows = res.parsedRows || [];
-      const { rows, issues } = sanitizeHierarchyRows(parsedRows);
+      const { rows, issues, connections } = sanitizeHierarchyRows(parsedRows);
 
       if (!rows.length) {
         setDebugPayload(
@@ -785,12 +820,14 @@
         state.data = [];
         state.filtered = [];
         state.finalData = [];
+        state.connections = [];
         renderChart();
         closeDetails();
         return;
       }
 
       state.data = rows;
+      state.connections = connections;
       state.q = "";
       state.bolag = "all";
       state.plats = "all";
