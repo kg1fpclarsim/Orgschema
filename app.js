@@ -822,15 +822,70 @@
   }
 
   // Events
+  els.fileInput.addEventListener("click", () => {
+    // Allow selecting the same file again to re-trigger parsing.
+    els.fileInput.value = "";
+  });
+
   els.fileInput.addEventListener("change", (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
-    parseCsvWithFallback(file, (res) => {
-      const parsedRows = res.parsedRows || [];
-      const { rows, issues, connections } = sanitizeHierarchyRows(parsedRows);
+    setDebugPayload({
+      timestamp: new Date().toISOString(),
+      fileName: file.name,
+      info: "CSV vald. Läser in…",
+    });
 
-      if (!rows.length) {
+    try {
+      parseCsvWithFallback(file, (res) => {
+        const parsedRows = res.parsedRows || [];
+        const { rows, issues, connections } = sanitizeHierarchyRows(parsedRows);
+
+        if (!rows.length) {
+          setDebugPayload(
+            buildDebugInfo({
+              fileName: file.name,
+              parseResult: res,
+              parsedRows,
+              sanitizedRows: rows,
+              issues,
+            })
+          );
+          showHint(
+            "Inga giltiga rader hittades i CSV-filen. Kontrollera att kolumnen 'Roll-ID' finns och att separatorn är korrekt (komma eller semikolon)."
+          );
+          setControlsEnabled(false);
+          state.data = [];
+          state.filtered = [];
+          state.finalData = [];
+          state.connections = [];
+          renderChart();
+          closeDetails();
+          return;
+        }
+
+        state.data = rows;
+        state.connections = connections;
+        state.q = "";
+        state.bolag = "all";
+        state.plats = "all";
+        state.trafik = "all";
+
+        els.searchInput.value = "";
+        els.filterBolag.value = "all";
+        els.filterPlats.value = "all";
+        els.filterTrafik.value = "all";
+
+        els.hint.style.display = "none";
+        if ((res.errors && res.errors.length) || issues.length) {
+          const details = issues.slice(0, 2).join(" ");
+          const more = issues.length > 2 ? ` (+${issues.length - 2} till)` : "";
+          showHint(
+            `CSV lästes in, men vissa rader behövde justeras för att kunna ritas. ${details}${more}`.trim()
+          );
+        }
+
         setDebugPayload(
           buildDebugInfo({
             fileName: file.name,
@@ -840,55 +895,24 @@
             issues,
           })
         );
-        showHint(
-          "Inga giltiga rader hittades i CSV-filen. Kontrollera att kolumnen 'Roll-ID' finns och att separatorn är korrekt (komma eller semikolon)."
-        );
-        setControlsEnabled(false);
-        state.data = [];
-        state.filtered = [];
-        state.finalData = [];
-        state.connections = [];
-        renderChart();
+
+        setControlsEnabled(true);
+        rebuildOptions();
+        refresh();
         closeDetails();
-        return;
-      }
-
-      state.data = rows;
-      state.connections = connections;
-      state.q = "";
-      state.bolag = "all";
-      state.plats = "all";
-      state.trafik = "all";
-
-      els.searchInput.value = "";
-      els.filterBolag.value = "all";
-      els.filterPlats.value = "all";
-      els.filterTrafik.value = "all";
-
-      els.hint.style.display = "none";
-      if ((res.errors && res.errors.length) || issues.length) {
-        const details = issues.slice(0, 2).join(" ");
-        const more = issues.length > 2 ? ` (+${issues.length - 2} till)` : "";
-        showHint(
-          `CSV lästes in, men vissa rader behövde justeras för att kunna ritas. ${details}${more}`.trim()
-        );
-      }
-
-      setDebugPayload(
-        buildDebugInfo({
-          fileName: file.name,
-          parseResult: res,
-          parsedRows,
-          sanitizedRows: rows,
-          issues,
-        })
-      );
-
-      setControlsEnabled(true);
-      rebuildOptions();
-      refresh();
-      closeDetails();
-    });
+      });
+    } catch (error) {
+      setDebugPayload({
+        timestamp: new Date().toISOString(),
+        fileName: file.name,
+        info: "CSV kunde inte läsas in.",
+        error: {
+          message: error?.message || "Okänt fel",
+          stack: error?.stack || null,
+        },
+      });
+      showHint("CSV kunde inte läsas in. Kontrollera filen och ladda om sidan.");
+    }
   });
 
   els.searchInput.addEventListener("input", (e) => {
