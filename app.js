@@ -205,14 +205,18 @@
     const byId = new Map(state.data.map((d) => [d.id, d]));
     const keep = new Set();
 
-    state.filtered.forEach((d) => {
-      let cur = d;
-      while (cur) {
-        if (keep.has(cur.id)) break;
-        keep.add(cur.id);
-        cur = cur.parentId ? byId.get(cur.parentId) || null : null;
-      }
-    });
+    const queue = state.filtered.slice();
+    while (queue.length) {
+      const cur = queue.shift();
+      if (!cur || keep.has(cur.id)) continue;
+      keep.add(cur.id);
+
+      const parents = Array.isArray(cur.parentIds) ? cur.parentIds : cur.parentId ? [cur.parentId] : [];
+      parents.forEach((parentId) => {
+        const parent = byId.get(parentId);
+        if (parent && !keep.has(parent.id)) queue.push(parent);
+      });
+    }
 
     return state.data.filter((d) => keep.has(d.id));
   }
@@ -659,7 +663,7 @@
     const issues = [];
     const uniqueRows = [];
     const byIdInitial = new Map();
-    const connections = [];
+    let connections = [];
 
     function mergeUniqueValues(...lists) {
       return Array.from(
@@ -718,9 +722,6 @@
       row.parentId = row.parentIds[0] || null;
 
       if (row.parentIds.length > 1) {
-        row.parentIds.slice(1).forEach((parentId) => {
-          connections.push({ from: parentId, to: row.id });
-        });
         issues.push(
           `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Extra överordnade ritas som kopplingslinjer utan att noden dupliceras.`
         );
@@ -775,6 +776,7 @@
 
       roots.forEach((row) => {
         row.parentId = syntheticId;
+        row.parentIds = [syntheticId];
       });
 
       uniqueRows.unshift({
@@ -793,6 +795,14 @@
 
       issues.push(`Flera rotnoder hittades (${roots.length}). En virtuell rotnod lades till så att schemat kan ritas.`);
     }
+
+    connections = uniqueRows.flatMap((row) => {
+      if (!row.parentId) return [];
+      const parents = Array.isArray(row.parentIds) ? row.parentIds : [];
+      return parents
+        .filter((parentId) => parentId && parentId !== row.parentId)
+        .map((parentId) => ({ from: parentId, to: row.id }));
+    });
 
     return {
       rows: uniqueRows,
