@@ -1,8 +1,13 @@
 /* global Papa, d3, d3OrgChart, OrgChart, htmlToImage, jspdf */
 (() => {
+  const d3Api = typeof d3 !== "undefined" ? d3 : null;
+  const PapaApi = typeof Papa !== "undefined" ? Papa : null;
+  const htmlToImageApi = typeof htmlToImage !== "undefined" ? htmlToImage : null;
+  const jsPdfApi = typeof jspdf !== "undefined" ? jspdf : null;
+
   const OrgChartCtor =
     (typeof d3OrgChart !== "undefined" && d3OrgChart && d3OrgChart.OrgChart) ||
-    (typeof d3 !== "undefined" && d3 && d3.OrgChart) ||
+    (d3Api && d3Api.OrgChart) ||
     (typeof OrgChart !== "undefined" ? OrgChart : null);
 
   const els = {
@@ -28,10 +33,12 @@
     debugOutput: document.getElementById("debugOutput"),
   };
 
+  const FALLBACK_COLORS = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948"];
+
   const COLOR_PRESETS = {
-    tableau: d3.schemeTableau10,
-    set3: d3.schemeSet3,
-    pastel1: d3.schemePastel1,
+    tableau: d3Api?.schemeTableau10 || FALLBACK_COLORS,
+    set3: d3Api?.schemeSet3 || FALLBACK_COLORS,
+    pastel1: d3Api?.schemePastel1 || FALLBACK_COLORS,
   };
 
   const state = {
@@ -248,7 +255,7 @@
       if (state.colorBy === "none") return { stripe: "#CBD5E1", soft: "rgba(203,213,225,.20)", key: "" };
       const key = keyFn(d);
       const stripe = map.get(key) || "#94A3B8";
-      const c = d3.color(stripe);
+      const c = d3Api?.color ? d3Api.color(stripe) : null;
       const soft = c ? c.copy({ opacity: 0.12 }).formatRgb() : "rgba(148,163,184,.12)";
       return { stripe, soft, key };
     };
@@ -302,7 +309,8 @@
     callIfFn(c, "linkUpdate", function (d) {
       const child = d.data?.data || d.data;
       const cc = colorState.colorFor(child);
-      d3.select(this).attr("stroke", cc?.stripe || "#CBD5E1").attr("stroke-width", 2).attr("stroke-opacity", 0.55);
+      if (!d3Api?.select) return;
+      d3Api.select(this).attr("stroke", cc?.stripe || "#CBD5E1").attr("stroke-width", 2).attr("stroke-opacity", 0.55);
     });
 
     callIfFn(c, "buttonContent", ({ node }) => {
@@ -497,8 +505,12 @@
   }
 
   async function exportPNG() {
+    if (!htmlToImageApi?.toPng) {
+      showHint("Exportbiblioteket kunde inte laddas. Kontrollera nätverk/brandvägg och ladda om sidan.");
+      return;
+    }
     const node = els.chart;
-    const dataUrl = await htmlToImage.toPng(node, { pixelRatio: 2, cacheBust: true });
+    const dataUrl = await htmlToImageApi.toPng(node, { pixelRatio: 2, cacheBust: true });
     const a = document.createElement("a");
     a.download = `organisationsschema_${ts()}.png`;
     a.href = dataUrl;
@@ -506,14 +518,18 @@
   }
 
   async function exportPDF() {
+    if (!htmlToImageApi?.toPng || !jsPdfApi?.jsPDF) {
+      showHint("PDF-export kunde inte initieras eftersom nödvändiga bibliotek saknas.");
+      return;
+    }
     const node = els.chart;
-    const dataUrl = await htmlToImage.toPng(node, { pixelRatio: 2, cacheBust: true });
+    const dataUrl = await htmlToImageApi.toPng(node, { pixelRatio: 2, cacheBust: true });
 
     const img = new Image();
     img.src = dataUrl;
     await img.decode();
 
-    const { jsPDF } = jspdf;
+    const { jsPDF } = jsPdfApi;
     const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
@@ -548,10 +564,18 @@
       .map((r) => {
         const parentRaw = getField(
           r,
+
           "Rapporterar till (Roll)",
+          "Rapporterar till (Roll-ID)",
           "Rapporterar till Roll",
+          "Rapporterar till Roll-ID",
+          "Rapporterar till (Roll ID)",
           "Rapporterar till",
+          "Rapporterar till ID",
           "Parent",
+          "ParentID",
+          "ParentId",
+          "Parent Role ID",
           "Parent ID"
         );
 
@@ -561,12 +585,16 @@
 
         return {
           id: sanitizeIdentifier(
-            getField(r, "Roll-ID", "Roll ID", "ID", "Role-ID", "role-id")
+            getField(r, "Roll-ID", "Roll ID", "RollID", "ID", "Role-ID", "role-id", "Role ID")
           ),
           parentId: parentIds[0] || null,
           parentIds,
-          name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
-          title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
+
+          name:
+            norm(getField(r, "Namn", "Name", "Person", "Personnamn")) ||
+            norm(getField(r, "Manuellt namn", "Manual Name")) ||
+            "(saknar namn)",
+          title: norm(getField(r, "Roll - Titel", "Rolltitel", "Titel", "Role Title", "Title")) || "(saknar titel)",
           bolag: norm(getField(r, "Bolag")),
           plats: norm(getField(r, "Plats / Nivå")),
           trafik: norm(getField(r, "Trafikområde")),
@@ -736,12 +764,17 @@
   }
 
   function parseCsvWithFallback(file, onDone) {
+    if (!PapaApi?.parse) {
+      onDone({ data: [], errors: [{ code: "ParserLibraryMissing" }], parsedRows: [] });
+      return;
+    }
+
     const delimiters = ["", ";", ",", "\t"];
     let index = 0;
 
     function run() {
       const delimiter = delimiters[index++];
-      Papa.parse(file, {
+      PapaApi.parse(file, {
         header: true,
         delimiter,
         skipEmptyLines: true,
@@ -980,4 +1013,8 @@
   // Start disabled until CSV loaded
   setControlsEnabled(false);
   setDebugPayload({ info: "Ingen CSV laddad ännu." });
+
+  if (!PapaApi?.parse) {
+    showHint("CSV-biblioteket kunde inte laddas. Kontrollera nätverk/brandvägg och ladda om sidan.");
+  }
 })();
