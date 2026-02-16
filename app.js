@@ -610,6 +610,7 @@
     const issues = [];
     const uniqueRows = [];
     const seen = new Set();
+    const connections = [];
 
     (rows || []).forEach((row) => {
       if (!row || !row.id) return;
@@ -621,42 +622,9 @@
       uniqueRows.push({ ...row });
     });
 
-    const multiParentRows = [];
+    const byId = new Map(uniqueRows.map((row) => [row.id, row]));
+
     uniqueRows.forEach((row) => {
-      const parentIds = Array.isArray(row.parentIds) ? row.parentIds : row.parentId ? [row.parentId] : [];
-      if (parentIds.length <= 1) {
-        row.parentId = parentIds[0] || null;
-        row.parentIds = parentIds;
-        multiParentRows.push(row);
-        return;
-      }
-
-      const [primaryParentId, ...extraParentIds] = parentIds;
-      row.parentId = primaryParentId;
-      row.parentIds = parentIds;
-      multiParentRows.push(row);
-
-      extraParentIds.forEach((parentId, idx) => {
-        let cloneId = `${row.id}__mparent_${idx + 2}`;
-        while (seen.has(cloneId)) cloneId += "_x";
-        seen.add(cloneId);
-
-        multiParentRows.push({
-          ...row,
-          id: cloneId,
-          parentId,
-          parentIds: [parentId],
-        });
-      });
-
-      issues.push(
-        `Roll-ID '${row.id}' rapporterade till flera överordnade (${parentIds.join(", ")}). Noden duplicerades i schemat.`
-      );
-    });
-
-    const byId = new Map(multiParentRows.map((row) => [row.id, row]));
-
-    multiParentRows.forEach((row) => {
       const parentIds = Array.isArray(row.parentIds) ? row.parentIds.slice() : row.parentId ? [row.parentId] : [];
 
       if (row.parentId && row.parentId === row.id) {
@@ -676,8 +644,15 @@
       row.parentId = validParents[0] || null;
 
       if (validParents.length > 1) {
+        validParents.slice(1).forEach((parentId) => {
+          connections.push({
+            from: parentId,
+            to: row.id,
+          });
+        });
+
         issues.push(
-          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Noden duplicerades så att varje koppling ritas som en vanlig föräldralänk.`
+          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Extra överordnade ritas som kopplingslinjer utan att noden dupliceras.`
         );
       }
     });
@@ -713,9 +688,9 @@
 
     Array.from(byId.keys()).forEach((id) => walk(id));
 
-    const hasRoot = multiParentRows.some((row) => !row.parentId);
-    if (!hasRoot && multiParentRows.length) {
-      const forcedRoot = multiParentRows[0];
+    const hasRoot = uniqueRows.some((row) => !row.parentId);
+    if (!hasRoot && uniqueRows.length) {
+      const forcedRoot = uniqueRows[0];
       issues.push(
         `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
       );
@@ -723,7 +698,7 @@
       forcedRoot.parentIds = [];
     }
 
-    const roots = multiParentRows.filter((row) => !row.parentId);
+    const roots = uniqueRows.filter((row) => !row.parentId);
     if (roots.length > 1) {
       let syntheticId = "__virtual_root__";
       while (byId.has(syntheticId)) syntheticId += "_x";
@@ -732,7 +707,7 @@
         row.parentId = syntheticId;
       });
 
-      multiParentRows.unshift({
+      uniqueRows.unshift({
         id: syntheticId,
         parentId: null,
         parentIds: [],
@@ -752,9 +727,9 @@
     }
 
     return {
-      rows: multiParentRows,
+      rows: uniqueRows,
       issues,
-      connections: [],
+      connections,
     };
   }
 
