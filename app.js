@@ -609,20 +609,8 @@
   function sanitizeHierarchyRows(rows) {
     const issues = [];
     const uniqueRows = [];
-    const byIdInitial = new Map();
+    const seen = new Set();
     const connections = [];
-
-    function makeFingerprint(row) {
-      const ansvar = Array.isArray(row.ansvar) ? row.ansvar.join("|") : "";
-      const sam = Array.isArray(row.sam) ? row.sam.join("|") : "";
-      return [row.name, row.title, row.bolag, row.plats, row.trafik, ansvar, sam, row.arbetsbeskrivning]
-        .map((v) => norm(v).toLowerCase())
-        .join("::");
-    }
-
-    function mergeUniqueValues(...lists) {
-      return Array.from(new Set(lists.flat().filter(Boolean)));
-    }
 
     (rows || []).forEach((row) => {
       if (!row || !row.id) return;
@@ -650,42 +638,9 @@
       uniqueRows.push(merged);
     });
 
-    const aliasById = new Map();
-    const canonicalByFingerprint = new Map();
-    const mergedRows = [];
+    const byId = new Map(uniqueRows.map((row) => [row.id, row]));
 
     uniqueRows.forEach((row) => {
-      const key = makeFingerprint(row);
-      if (!key || key === ":::::::") {
-        aliasById.set(row.id, row.id);
-        mergedRows.push(row);
-        return;
-      }
-
-      const existing = canonicalByFingerprint.get(key);
-      if (!existing) {
-        canonicalByFingerprint.set(key, row);
-        aliasById.set(row.id, row.id);
-        mergedRows.push(row);
-        return;
-      }
-
-      aliasById.set(row.id, existing.id);
-      existing.parentIds = mergeUniqueValues(existing.parentIds || [], row.parentIds || []);
-      existing.ansvar = mergeUniqueValues(existing.ansvar || [], row.ansvar || []);
-      existing.sam = mergeUniqueValues(existing.sam || [], row.sam || []);
-      issues.push(
-        `Roll-ID '${row.id}' hade samma innehåll som '${existing.id}' och slogs ihop för att undvika visuell duplicering.`
-      );
-    });
-
-    mergedRows.forEach((row) => {
-      row.parentIds = (row.parentIds || []).map((parentId) => aliasById.get(parentId) || parentId);
-    });
-
-    const byId = new Map(mergedRows.map((row) => [row.id, row]));
-
-    mergedRows.forEach((row) => {
       const parentIds = Array.isArray(row.parentIds) ? row.parentIds.slice() : row.parentId ? [row.parentId] : [];
 
       if (row.parentId && row.parentId === row.id) {
@@ -707,8 +662,16 @@
           connections.push({ from: parentId, to: row.id });
         });
 
+      if (validParents.length > 1) {
+        validParents.slice(1).forEach((parentId) => {
+          connections.push({
+            from: parentId,
+            to: row.id,
+          });
+        });
+
         issues.push(
-          `Roll-ID '${row.id}' rapporterade till flera överordnade (${row.parentIds.join(", ")}). Extra överordnade ritas som kopplingslinjer utan att noden dupliceras.`
+          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Extra överordnade ritas som kopplingslinjer utan att noden dupliceras.`
         );
       }
     });
@@ -744,15 +707,17 @@
 
     Array.from(byId.keys()).forEach((id) => walk(id));
 
-    const hasRoot = mergedRows.some((row) => !row.parentId);
-    if (!hasRoot && mergedRows.length) {
-      const forcedRoot = mergedRows[0];
-      issues.push(`Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`);
+    const hasRoot = uniqueRows.some((row) => !row.parentId);
+    if (!hasRoot && uniqueRows.length) {
+      const forcedRoot = uniqueRows[0];
+      issues.push(
+        `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
+      );
       forcedRoot.parentId = null;
       forcedRoot.parentIds = [];
     }
 
-    const roots = mergedRows.filter((row) => !row.parentId);
+    const roots = uniqueRows.filter((row) => !row.parentId);
     if (roots.length > 1) {
       let syntheticId = "__virtual_root__";
       while (byId.has(syntheticId)) syntheticId += "_x";
@@ -761,7 +726,7 @@
         row.parentId = syntheticId;
       });
 
-      mergedRows.unshift({
+      uniqueRows.unshift({
         id: syntheticId,
         parentId: null,
         parentIds: [],
@@ -779,7 +744,7 @@
     }
 
     return {
-      rows: mergedRows,
+      rows: uniqueRows,
       issues,
       connections,
     };
