@@ -593,20 +593,43 @@
       uniqueRows.push({ ...row });
     });
 
-    const byId = new Map(uniqueRows.map((row) => [row.id, row]));
-    const connections = [];
-
+    const multiParentRows = [];
     uniqueRows.forEach((row) => {
-      const rawParentIds = Array.isArray(row.parentIds)
-        ? row.parentIds
-        : row.parentId
-          ? [row.parentId]
-          : [];
+      const parentIds = Array.isArray(row.parentIds) ? row.parentIds : row.parentId ? [row.parentId] : [];
+      if (parentIds.length <= 1) {
+        row.parentId = parentIds[0] || null;
+        row.parentIds = parentIds;
+        multiParentRows.push(row);
+        return;
+      }
 
-      const parentIds = Array.from(new Set(rawParentIds.map((x) => sanitizeIdentifier(x)).filter(Boolean)));
-      const validParents = parentIds.filter((parentId) => parentId !== row.id && byId.has(parentId));
+      const [primaryParentId, ...extraParentIds] = parentIds;
+      row.parentId = primaryParentId;
+      row.parentIds = parentIds;
+      multiParentRows.push(row);
 
-      if (parentIds.some((parentId) => parentId === row.id)) {
+      extraParentIds.forEach((parentId, idx) => {
+        let cloneId = `${row.id}__mparent_${idx + 2}`;
+        while (seen.has(cloneId)) cloneId += "_x";
+        seen.add(cloneId);
+
+        multiParentRows.push({
+          ...row,
+          id: cloneId,
+          parentId,
+          parentIds: [parentId],
+        });
+      });
+
+      issues.push(
+        `Roll-ID '${row.id}' rapporterade till flera överordnade (${parentIds.join(", ")}). Noden duplicerades i schemat.`
+      );
+    });
+
+    const byId = new Map(multiParentRows.map((row) => [row.id, row]));
+
+    multiParentRows.forEach((row) => {
+      if (row.parentId && row.parentId === row.id) {
         issues.push(`Roll-ID '${row.id}' rapporterade till sig själv. Länken togs bort.`);
       }
 
@@ -663,9 +686,9 @@
 
     Array.from(byId.keys()).forEach((id) => walk(id));
 
-    const hasRoot = uniqueRows.some((row) => !row.parentId);
-    if (!hasRoot && uniqueRows.length) {
-      const forcedRoot = uniqueRows[0];
+    const hasRoot = multiParentRows.some((row) => !row.parentId);
+    if (!hasRoot && multiParentRows.length) {
+      const forcedRoot = multiParentRows[0];
       issues.push(
         `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
       );
@@ -673,7 +696,7 @@
       forcedRoot.parentIds = [];
     }
 
-    const roots = uniqueRows.filter((row) => !row.parentId);
+    const roots = multiParentRows.filter((row) => !row.parentId);
     if (roots.length > 1) {
       let syntheticId = "__virtual_root__";
       while (byId.has(syntheticId)) syntheticId += "_x";
@@ -682,7 +705,7 @@
         row.parentId = syntheticId;
       });
 
-      uniqueRows.unshift({
+      multiParentRows.unshift({
         id: syntheticId,
         parentId: null,
         parentIds: [],
@@ -702,7 +725,7 @@
     }
 
     return {
-      rows: uniqueRows,
+      rows: multiParentRows,
       issues,
       connections,
     };
