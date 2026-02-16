@@ -543,30 +543,36 @@
 
   function parseRows(rawRows) {
     return (rawRows || [])
-      .map((r) => ({
-        id: sanitizeIdentifier(
-          getField(r, "Roll-ID", "Roll ID", "ID", "Role-ID", "role-id")
-        ),
-        parentId:
-          sanitizeIdentifier(
-            getField(
-              r,
-              "Rapporterar till (Roll)",
-              "Rapporterar till Roll",
-              "Rapporterar till",
-              "Parent",
-              "Parent ID"
-            )
-          ) || null,
-        name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
-        title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
-        bolag: norm(getField(r, "Bolag")),
-        plats: norm(getField(r, "Plats / Nivå")),
-        trafik: norm(getField(r, "Trafikområde")),
-        ansvar: parseMaybeList(getField(r, "Ansvarsområde")),
-        sam: parseMaybeList(getField(r, "Fördelning SAM")),
-        arbetsbeskrivning: norm(getField(r, "Arbetsbeskrivning")),
-      }))
+      .map((r) => {
+        const parentRaw = getField(
+          r,
+          "Rapporterar till (Roll)",
+          "Rapporterar till Roll",
+          "Rapporterar till",
+          "Parent",
+          "Parent ID"
+        );
+
+        const parentIds = Array.from(
+          new Set(parseMaybeList(parentRaw).map((x) => sanitizeIdentifier(x)).filter(Boolean))
+        );
+
+        return {
+          id: sanitizeIdentifier(
+            getField(r, "Roll-ID", "Roll ID", "ID", "Role-ID", "role-id")
+          ),
+          parentId: parentIds[0] || null,
+          parentIds,
+          name: norm(getField(r, "Namn")) || norm(getField(r, "Manuellt namn")) || "(saknar namn)",
+          title: norm(getField(r, "Roll - Titel")) || "(saknar titel)",
+          bolag: norm(getField(r, "Bolag")),
+          plats: norm(getField(r, "Plats / Nivå")),
+          trafik: norm(getField(r, "Trafikområde")),
+          ansvar: parseMaybeList(getField(r, "Ansvarsområde")),
+          sam: parseMaybeList(getField(r, "Fördelning SAM")),
+          arbetsbeskrivning: norm(getField(r, "Arbetsbeskrivning")),
+        };
+      })
       .filter((d) => d.id);
   }
 
@@ -585,9 +591,42 @@
       uniqueRows.push({ ...row });
     });
 
-    const byId = new Map(uniqueRows.map((row) => [row.id, row]));
-
+    const multiParentRows = [];
     uniqueRows.forEach((row) => {
+      const parentIds = Array.isArray(row.parentIds) ? row.parentIds : row.parentId ? [row.parentId] : [];
+      if (parentIds.length <= 1) {
+        row.parentId = parentIds[0] || null;
+        row.parentIds = parentIds;
+        multiParentRows.push(row);
+        return;
+      }
+
+      const [primaryParentId, ...extraParentIds] = parentIds;
+      row.parentId = primaryParentId;
+      row.parentIds = parentIds;
+      multiParentRows.push(row);
+
+      extraParentIds.forEach((parentId, idx) => {
+        let cloneId = `${row.id}__mparent_${idx + 2}`;
+        while (seen.has(cloneId)) cloneId += "_x";
+        seen.add(cloneId);
+
+        multiParentRows.push({
+          ...row,
+          id: cloneId,
+          parentId,
+          parentIds: [parentId],
+        });
+      });
+
+      issues.push(
+        `Roll-ID '${row.id}' rapporterade till flera överordnade (${parentIds.join(", ")}). Noden duplicerades i schemat.`
+      );
+    });
+
+    const byId = new Map(multiParentRows.map((row) => [row.id, row]));
+
+    multiParentRows.forEach((row) => {
       if (row.parentId && row.parentId === row.id) {
         issues.push(`Roll-ID '${row.id}' rapporterade till sig själv. Länken togs bort.`);
         row.parentId = null;
@@ -631,16 +670,16 @@
 
     Array.from(byId.keys()).forEach((id) => walk(id));
 
-    const hasRoot = uniqueRows.some((row) => !row.parentId);
-    if (!hasRoot && uniqueRows.length) {
-      const forcedRoot = uniqueRows[0];
+    const hasRoot = multiParentRows.some((row) => !row.parentId);
+    if (!hasRoot && multiParentRows.length) {
+      const forcedRoot = multiParentRows[0];
       issues.push(
         `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
       );
       forcedRoot.parentId = null;
     }
 
-    const roots = uniqueRows.filter((row) => !row.parentId);
+    const roots = multiParentRows.filter((row) => !row.parentId);
     if (roots.length > 1) {
       let syntheticId = "__virtual_root__";
       while (byId.has(syntheticId)) syntheticId += "_x";
@@ -649,9 +688,10 @@
         row.parentId = syntheticId;
       });
 
-      uniqueRows.unshift({
+      multiParentRows.unshift({
         id: syntheticId,
         parentId: null,
+        parentIds: [],
         name: "Organisation",
         title: "Automatisk rotnod",
         bolag: "",
@@ -668,7 +708,7 @@
     }
 
     return {
-      rows: uniqueRows,
+      rows: multiParentRows,
       issues,
     };
   }
