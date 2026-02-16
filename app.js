@@ -580,6 +580,7 @@
 
   function sanitizeHierarchyRows(rows) {
     const issues = [];
+    const connections = [];
     const uniqueRows = [];
     const seen = new Set();
 
@@ -629,6 +630,8 @@
     const byId = new Map(multiParentRows.map((row) => [row.id, row]));
 
     multiParentRows.forEach((row) => {
+      const parentIds = Array.isArray(row.parentIds) ? row.parentIds.slice() : row.parentId ? [row.parentId] : [];
+
       if (row.parentId && row.parentId === row.id) {
         issues.push(`Roll-ID '${row.id}' rapporterade till sig själv. Länken togs bort.`);
       }
@@ -641,6 +644,7 @@
         }
       });
 
+      const validParents = parentIds.filter((parentId) => parentId !== row.id && byId.has(parentId));
       row.parentIds = validParents;
       row.parentId = validParents[0] || null;
 
