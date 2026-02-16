@@ -288,8 +288,6 @@
     };
   }
 
-  const DEFAULT_JUNCTION_GAP = 30;
-
   function toFiniteNumber(value) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : null;
@@ -320,7 +318,7 @@
     };
   }
 
-  function buildSingleParentPath(sourceNode, targetNode, fallbackPathValue) {
+  function buildOrthogonalPath(sourceNode, targetNode, fallbackPathValue) {
     const sourceRect = getNodeRect(sourceNode);
     const targetRect = getNodeRect(targetNode);
 
@@ -330,34 +328,12 @@
     const startY = sourceRect.bottomY;
     const endX = targetRect.centerX;
     const endY = targetRect.topY;
-    const laneY = startY + Math.max(18, Math.min(Math.max(24, endY - startY) - 18, (endY - startY) * 0.58));
+    const laneY = startY + (endY - startY) / 2;
 
     return `M ${startX},${startY}
-      L ${startX},${laneY}
-      L ${endX},${laneY}
-      L ${endX},${endY}`;
-  }
-
-  function buildMultiParentPath(sourceNode, targetNode, isTrunkPath, junctionGap, fallbackPathValue) {
-    const sourceRect = getNodeRect(sourceNode);
-    const targetRect = getNodeRect(targetNode);
-
-    if (!sourceRect || !targetRect) return fallbackPathValue;
-
-    const startX = sourceRect.centerX;
-    const startY = sourceRect.bottomY;
-    const childX = targetRect.centerX;
-    const childTopY = targetRect.topY;
-    const junctionY = childTopY - junctionGap;
-
-    return isTrunkPath
-      ? `M ${startX},${startY}
-        L ${startX},${junctionY}
-        L ${childX},${junctionY}
-        L ${childX},${childTopY}`
-      : `M ${startX},${startY}
-        L ${startX},${junctionY}
-        L ${childX},${junctionY}`;
+      V ${laneY}
+      H ${endX}
+      V ${endY}`;
   }
 
   function getConnectionFromTo(connectionLike) {
@@ -425,15 +401,17 @@
       const cc = colorState.colorFor(child);
       if (!d3Api?.select) return;
 
-      const isMultiParentChild = Array.isArray(child?.parentIds) && child.parentIds.length > 1;
       const link = d3Api.select(this);
+      const currentPath = link.attr("d");
+      const finalPath = buildOrthogonalPath(d?.source, d?.target, currentPath);
 
-      if (isMultiParentChild) {
-        link.attr("stroke-opacity", 0).attr("marker-end", "none");
-        return;
-      }
-
-      link.attr("stroke", cc?.stripe || "#CBD5E1").attr("stroke-width", 2).attr("stroke-opacity", 0.55).attr("marker-end", null);
+      link
+        .attr("d", finalPath)
+        .attr("fill", "none")
+        .attr("stroke", cc?.stripe || "#CBD5E1")
+        .attr("stroke-width", 2)
+        .attr("stroke-opacity", 0.55)
+        .attr("marker-end", null);
     });
 
     callIfFn(c, "connectionsUpdate", function (d) {
@@ -443,19 +421,16 @@
       const currentPath = pathSelection.attr("d");
       const connection = getConnectionFromTo(d);
       const child = connection.to ? rowsById.get(connection.to) : null;
-      const isMultiParentChild = Array.isArray(child?.parentIds) && child.parentIds.length > 1;
-      const shouldDrawTrunk = isMultiParentChild && connection.from === child.parentId;
-      const finalPath = isMultiParentChild
-        ? buildMultiParentPath(d?.source, d?.target, shouldDrawTrunk, DEFAULT_JUNCTION_GAP, currentPath)
-        : buildSingleParentPath(d?.source, d?.target, currentPath);
+      const cc = colorState.colorFor(child || {});
+      const finalPath = buildOrthogonalPath(d?.source, d?.target, currentPath);
 
       pathSelection
         .attr("d", finalPath)
         .attr("fill", "none")
-        .attr("stroke", "#0f172a")
-        .attr("stroke-width", 1.4)
-        .attr("stroke-opacity", 0.75)
-        .attr("marker-end", isMultiParentChild && !shouldDrawTrunk ? "none" : null);
+        .attr("stroke", cc?.stripe || "#CBD5E1")
+        .attr("stroke-width", 2)
+        .attr("stroke-opacity", 0.55)
+        .attr("marker-end", null);
     });
 
     callIfFn(c, "buttonContent", ({ node }) => {
