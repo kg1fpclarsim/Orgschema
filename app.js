@@ -288,21 +288,76 @@
     };
   }
 
-  function buildRoutedConnectionPath(pathValue) {
-    const points = extractPathEndpoints(pathValue);
-    if (!points) return pathValue;
+  const DEFAULT_JUNCTION_GAP = 30;
 
-    const { startX, startY, endX, endY } = points;
-    const gapY = endY - startY;
+  function toFiniteNumber(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
 
-    if (!Number.isFinite(gapY) || Math.abs(gapY) < 24) return pathValue;
+  function getNodeRect(nodeLike) {
+    const node = nodeLike?.data || nodeLike || {};
+    const rawX = node.x ?? nodeLike?.x;
+    const rawY = node.y ?? nodeLike?.y;
+    const rawWidth = node.width ?? nodeLike?.width ?? node.data?.width;
+    const rawHeight = node.height ?? nodeLike?.height ?? node.data?.height;
 
-    const laneY = startY + Math.max(18, Math.min(gapY - 18, gapY * 0.58));
+    const x = toFiniteNumber(rawX);
+    const y = toFiniteNumber(rawY);
+    const width = toFiniteNumber(rawWidth);
+    const height = toFiniteNumber(rawHeight);
+
+    if (x === null || y === null || width === null || height === null) return null;
+
+    return {
+      x,
+      y,
+      width,
+      height,
+      centerX: x + width / 2,
+      topY: y,
+      bottomY: y + height,
+    };
+  }
+
+  function buildSingleParentPath(sourceNode, targetNode, fallbackPathValue) {
+    const sourceRect = getNodeRect(sourceNode);
+    const targetRect = getNodeRect(targetNode);
+
+    if (!sourceRect || !targetRect) return fallbackPathValue;
+
+    const startX = sourceRect.centerX;
+    const startY = sourceRect.bottomY;
+    const endX = targetRect.centerX;
+    const endY = targetRect.topY;
+    const laneY = startY + Math.max(18, Math.min(Math.max(24, endY - startY) - 18, (endY - startY) * 0.58));
 
     return `M ${startX},${startY}
       L ${startX},${laneY}
       L ${endX},${laneY}
       L ${endX},${endY}`;
+  }
+
+  function buildMultiParentPath(sourceNode, targetNode, isTrunkPath, junctionGap, fallbackPathValue) {
+    const sourceRect = getNodeRect(sourceNode);
+    const targetRect = getNodeRect(targetNode);
+
+    if (!sourceRect || !targetRect) return fallbackPathValue;
+
+    const startX = sourceRect.centerX;
+    const startY = sourceRect.bottomY;
+    const childX = targetRect.centerX;
+    const childTopY = targetRect.topY;
+    const junctionY = childTopY - junctionGap;
+
+    return isTrunkPath
+      ? `M ${startX},${startY}
+        L ${startX},${junctionY}
+        L ${childX},${junctionY}
+        L ${childX},${childTopY}`
+      : `M ${startX},${startY}
+        L ${startX},${junctionY}
+        L ${childX},${junctionY}`;
   }
 
   function getConnectionFromTo(connectionLike) {
@@ -386,34 +441,13 @@
 
       const pathSelection = d3Api.select(this);
       const currentPath = pathSelection.attr("d");
-      const routedPath = buildRoutedConnectionPath(currentPath);
       const connection = getConnectionFromTo(d);
       const child = connection.to ? rowsById.get(connection.to) : null;
       const isMultiParentChild = Array.isArray(child?.parentIds) && child.parentIds.length > 1;
-
-      let finalPath = routedPath;
       const shouldDrawTrunk = isMultiParentChild && connection.from === child.parentId;
-
-      if (isMultiParentChild) {
-        const points = extractPathEndpoints(currentPath);
-        if (points) {
-          const { startX, startY, endX, endY } = points;
-          const safeStartY = Math.min(startY, endY - 44);
-          const mergeY = endY - 12;
-          const branchY = Math.max(safeStartY + 20, endY - 36);
-
-          finalPath = shouldDrawTrunk
-            ? `M ${startX},${startY}
-              L ${startX},${branchY}
-              L ${endX},${branchY}
-              L ${endX},${mergeY}
-              L ${endX},${endY}`
-            : `M ${startX},${startY}
-              L ${startX},${branchY}
-              L ${endX},${branchY}
-              L ${endX},${mergeY}`;
-        }
-      }
+      const finalPath = isMultiParentChild
+        ? buildMultiParentPath(d?.source, d?.target, shouldDrawTrunk, DEFAULT_JUNCTION_GAP, currentPath)
+        : buildSingleParentPath(d?.source, d?.target, currentPath);
 
       pathSelection
         .attr("d", finalPath)
