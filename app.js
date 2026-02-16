@@ -49,6 +49,7 @@
     showAllSam: false,
     showFullDesc: false,
     debug: null,
+    connections: [],
   };
 
   function norm(v) {
@@ -289,6 +290,7 @@
     c.data(state.finalData);
     c.nodeId((d) => d.id);
     c.parentNodeId((d) => d.parentId);
+    callIfFn(c, "connections", state.connections || []);
 
     callIfFn(c, "svgHeight", 640);
     callIfFn(c, "nodeWidth", () => 260);
@@ -629,14 +631,27 @@
     multiParentRows.forEach((row) => {
       if (row.parentId && row.parentId === row.id) {
         issues.push(`Roll-ID '${row.id}' rapporterade till sig själv. Länken togs bort.`);
-        row.parentId = null;
       }
 
-      if (row.parentId && !byId.has(row.parentId)) {
+      parentIds.forEach((parentId) => {
+        if (parentId !== row.id && !byId.has(parentId)) {
+          issues.push(
+            `Roll-ID '${row.id}' rapporterade till okänd chef ('${parentId}'). Länken togs bort.`
+          );
+        }
+      });
+
+      row.parentIds = validParents;
+      row.parentId = validParents[0] || null;
+
+      if (validParents.length > 1) {
+        validParents.slice(1).forEach((extraParentId) => {
+          connections.push({ from: extraParentId, to: row.id });
+        });
+
         issues.push(
-          `Roll-ID '${row.id}' rapporterade till okänd chef ('${row.parentId}'). Länken togs bort.`
+          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Extra kopplingar ritades som sidolänkar.`
         );
-        row.parentId = null;
       }
     });
 
@@ -654,6 +669,7 @@
         if (breakNode && breakNode.parentId) {
           issues.push(`Cykel hittades (${cycle.join(" → ")}). Länken för '${breakNodeId}' togs bort.`);
           breakNode.parentId = null;
+          breakNode.parentIds = [];
         }
         return;
       }
@@ -677,6 +693,7 @@
         `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
       );
       forcedRoot.parentId = null;
+      forcedRoot.parentIds = [];
     }
 
     const roots = multiParentRows.filter((row) => !row.parentId);
@@ -710,6 +727,7 @@
     return {
       rows: multiParentRows,
       issues,
+      connections,
     };
   }
 
@@ -806,7 +824,7 @@
 
     parseCsvWithFallback(file, (res) => {
       const parsedRows = res.parsedRows || [];
-      const { rows, issues } = sanitizeHierarchyRows(parsedRows);
+      const { rows, issues, connections } = sanitizeHierarchyRows(parsedRows);
 
       if (!rows.length) {
         setDebugPayload(
@@ -825,12 +843,14 @@
         state.data = [];
         state.filtered = [];
         state.finalData = [];
+        state.connections = [];
         renderChart();
         closeDetails();
         return;
       }
 
       state.data = rows;
+      state.connections = connections;
       state.q = "";
       state.bolag = "all";
       state.plats = "all";
