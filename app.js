@@ -16,6 +16,7 @@
     filterBolag: document.getElementById("filterBolag"),
     filterPlats: document.getElementById("filterPlats"),
     filterTrafik: document.getElementById("filterTrafik"),
+    nodeTitleField: document.getElementById("nodeTitleField"),
     colorBy: document.getElementById("colorBy"),
     palette: document.getElementById("palette"),
     expandAllBtn: document.getElementById("expandAllBtn"),
@@ -51,6 +52,7 @@
     bolag: "all",
     plats: "all",
     trafik: "all",
+    nodeTitleField: "name",
     colorBy: "branch",
     palette: "tableau",
     showAllSam: false,
@@ -136,6 +138,7 @@
       "filterBolag",
       "filterPlats",
       "filterTrafik",
+      "nodeTitleField",
       "colorBy",
       "palette",
       "expandAllBtn",
@@ -147,6 +150,20 @@
       (k) => (els[k].disabled = !enabled)
     );
     els.palette.disabled = !enabled || state.colorBy === "none";
+  }
+
+  function resolveNodeHeading(row) {
+    if (state.nodeTitleField === "title") {
+      return {
+        heading: row.title || "(saknar titel)",
+        secondary: row.name || "(saknar namn)",
+      };
+    }
+
+    return {
+      heading: row.name || "(saknar namn)",
+      secondary: row.title || "(saknar titel)",
+    };
   }
 
   function uniqSorted(arr) {
@@ -458,6 +475,7 @@
     callIfFn(c, "nodeContent", (d) => {
       const row = unwrapNodeData(d);
       const cc = colorState.colorFor(row);
+      const nodeText = resolveNodeHeading(row);
 
       const platsLine = row.plats
         ? `<div style="font-size:12px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(
@@ -491,11 +509,11 @@
 
           <div style="position:absolute;left:12px;right:12px;top:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;">
             <div style="font-weight:900;font-size:14px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-              ${escapeHtml(row.name)}
+              ${escapeHtml(nodeText.heading)}
             </div>
 
             <div style="font-size:12px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-              ${escapeHtml(row.title)}
+              ${escapeHtml(nodeText.secondary)}
             </div>
 
             ${platsLine}
@@ -1030,11 +1048,13 @@
         state.bolag = "all";
         state.plats = "all";
         state.trafik = "all";
+        state.nodeTitleField = "name";
 
         els.searchInput.value = "";
         els.filterBolag.value = "all";
         els.filterPlats.value = "all";
         els.filterTrafik.value = "all";
+        els.nodeTitleField.value = "name";
 
         els.hint.style.display = "none";
         if ((res.errors && res.errors.length) || issues.length) {
@@ -1088,6 +1108,10 @@
   });
   els.filterTrafik.addEventListener("change", (e) => {
     state.trafik = e.target.value;
+    refresh();
+  });
+  els.nodeTitleField.addEventListener("change", (e) => {
+    state.nodeTitleField = e.target.value;
     refresh();
   });
 
