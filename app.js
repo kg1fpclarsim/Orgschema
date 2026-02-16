@@ -305,6 +305,26 @@
       L ${endX},${endY}`;
   }
 
+  function getConnectionFromTo(connectionLike) {
+    const from =
+      connectionLike?.from ??
+      connectionLike?.data?.from ??
+      connectionLike?.connection?.from ??
+      connectionLike?.source?.id ??
+      connectionLike?.source?.data?.id ??
+      null;
+
+    const to =
+      connectionLike?.to ??
+      connectionLike?.data?.to ??
+      connectionLike?.connection?.to ??
+      connectionLike?.target?.id ??
+      connectionLike?.target?.data?.id ??
+      null;
+
+    return { from, to };
+  }
+
   function renderChart() {
     els.chart.innerHTML = "";
     if (!state.finalData.length) {
@@ -313,6 +333,7 @@
     }
 
     const colorState = makeColorState();
+    const rowsById = new Map(state.finalData.map((row) => [row.id, row]));
 
     if (!OrgChartCtor) {
       showHint("Visualiseringsbiblioteket kunde inte laddas. Kontrollera nätverk/brandvägg och ladda om sidan.");
@@ -348,22 +369,59 @@
       const child = d.data?.data || d.data;
       const cc = colorState.colorFor(child);
       if (!d3Api?.select) return;
-      d3Api.select(this).attr("stroke", cc?.stripe || "#CBD5E1").attr("stroke-width", 2).attr("stroke-opacity", 0.55);
+
+      const isMultiParentChild = Array.isArray(child?.parentIds) && child.parentIds.length > 1;
+      const link = d3Api.select(this);
+
+      if (isMultiParentChild) {
+        link.attr("stroke-opacity", 0).attr("marker-end", "none");
+        return;
+      }
+
+      link.attr("stroke", cc?.stripe || "#CBD5E1").attr("stroke-width", 2).attr("stroke-opacity", 0.55).attr("marker-end", null);
     });
 
-    callIfFn(c, "connectionsUpdate", function () {
+    callIfFn(c, "connectionsUpdate", function (d) {
       if (!d3Api?.select) return;
 
-      const currentPath = d3Api.select(this).attr("d");
+      const pathSelection = d3Api.select(this);
+      const currentPath = pathSelection.attr("d");
       const routedPath = buildRoutedConnectionPath(currentPath);
+      const connection = getConnectionFromTo(d);
+      const child = connection.to ? rowsById.get(connection.to) : null;
+      const isMultiParentChild = Array.isArray(child?.parentIds) && child.parentIds.length > 1;
 
-      d3Api
-        .select(this)
-        .attr("d", routedPath)
+      let finalPath = routedPath;
+      const shouldDrawTrunk = isMultiParentChild && connection.from === child.parentId;
+
+      if (isMultiParentChild) {
+        const points = extractPathEndpoints(currentPath);
+        if (points) {
+          const { startX, startY, endX, endY } = points;
+          const gapY = endY - startY;
+          const branchY = startY + Math.max(18, Math.min(gapY - 34, gapY * 0.58));
+          const mergeY = branchY + 12;
+
+          finalPath = shouldDrawTrunk
+            ? `M ${startX},${startY}
+              L ${startX},${branchY}
+              L ${endX},${branchY}
+              L ${endX},${mergeY}
+              L ${endX},${endY}`
+            : `M ${startX},${startY}
+              L ${startX},${branchY}
+              L ${endX},${branchY}
+              L ${endX},${mergeY}`;
+        }
+      }
+
+      pathSelection
+        .attr("d", finalPath)
         .attr("fill", "none")
         .attr("stroke", "#0f172a")
         .attr("stroke-width", 1.4)
-        .attr("stroke-opacity", 0.75);
+        .attr("stroke-opacity", 0.75)
+        .attr("marker-end", isMultiParentChild && !shouldDrawTrunk ? "none" : null);
     });
 
     callIfFn(c, "buttonContent", ({ node }) => {
@@ -797,11 +855,9 @@
     }
 
     connections = uniqueRows.flatMap((row) => {
-      if (!row.parentId) return [];
-      const parents = Array.isArray(row.parentIds) ? row.parentIds : [];
-      return parents
-        .filter((parentId) => parentId && parentId !== row.parentId)
-        .map((parentId) => ({ from: parentId, to: row.id }));
+      const parents = Array.isArray(row.parentIds) ? row.parentIds.filter(Boolean) : [];
+      if (parents.length <= 1) return [];
+      return parents.map((parentId) => ({ from: parentId, to: row.id }));
     });
 
     return {
