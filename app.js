@@ -609,54 +609,83 @@
   function sanitizeHierarchyRows(rows) {
     const issues = [];
     const uniqueRows = [];
-    const seen = new Set();
+    const byIdInitial = new Map();
+    const connections = [];
+
+    function makeFingerprint(row) {
+      const ansvar = Array.isArray(row.ansvar) ? row.ansvar.join("|") : "";
+      const sam = Array.isArray(row.sam) ? row.sam.join("|") : "";
+      return [row.name, row.title, row.bolag, row.plats, row.trafik, ansvar, sam, row.arbetsbeskrivning]
+        .map((v) => norm(v).toLowerCase())
+        .join("::");
+    }
+
+    function mergeUniqueValues(...lists) {
+      return Array.from(new Set(lists.flat().filter(Boolean)));
+    }
 
     (rows || []).forEach((row) => {
       if (!row || !row.id) return;
-      if (seen.has(row.id)) {
-        issues.push(`Dubblett av Roll-ID '${row.id}' ignorerades.`);
+      const parentIds = Array.isArray(row.parentIds) ? row.parentIds : row.parentId ? [row.parentId] : [];
+      const existing = byIdInitial.get(row.id);
+      if (existing) {
+        existing.parentIds = mergeUniqueValues(existing.parentIds || [], parentIds);
+        if (!existing.name && row.name) existing.name = row.name;
+        if (!existing.title && row.title) existing.title = row.title;
+        if (!existing.bolag && row.bolag) existing.bolag = row.bolag;
+        if (!existing.plats && row.plats) existing.plats = row.plats;
+        if (!existing.trafik && row.trafik) existing.trafik = row.trafik;
+        if (!existing.arbetsbeskrivning && row.arbetsbeskrivning) existing.arbetsbeskrivning = row.arbetsbeskrivning;
+        existing.ansvar = mergeUniqueValues(existing.ansvar || [], row.ansvar || []);
+        existing.sam = mergeUniqueValues(existing.sam || [], row.sam || []);
+        issues.push(`Dubblett av Roll-ID '${row.id}' slogs ihop till en nod.`);
         return;
       }
-      seen.add(row.id);
-      uniqueRows.push({ ...row });
+
+      const merged = {
+        ...row,
+        parentIds: mergeUniqueValues(parentIds),
+      };
+      byIdInitial.set(row.id, merged);
+      uniqueRows.push(merged);
     });
 
-    const multiParentRows = [];
+    const aliasById = new Map();
+    const canonicalByFingerprint = new Map();
+    const mergedRows = [];
+
     uniqueRows.forEach((row) => {
-      const parentIds = Array.isArray(row.parentIds) ? row.parentIds : row.parentId ? [row.parentId] : [];
-      if (parentIds.length <= 1) {
-        row.parentId = parentIds[0] || null;
-        row.parentIds = parentIds;
-        multiParentRows.push(row);
+      const key = makeFingerprint(row);
+      if (!key || key === ":::::::") {
+        aliasById.set(row.id, row.id);
+        mergedRows.push(row);
         return;
       }
 
-      const [primaryParentId, ...extraParentIds] = parentIds;
-      row.parentId = primaryParentId;
-      row.parentIds = parentIds;
-      multiParentRows.push(row);
+      const existing = canonicalByFingerprint.get(key);
+      if (!existing) {
+        canonicalByFingerprint.set(key, row);
+        aliasById.set(row.id, row.id);
+        mergedRows.push(row);
+        return;
+      }
 
-      extraParentIds.forEach((parentId, idx) => {
-        let cloneId = `${row.id}__mparent_${idx + 2}`;
-        while (seen.has(cloneId)) cloneId += "_x";
-        seen.add(cloneId);
-
-        multiParentRows.push({
-          ...row,
-          id: cloneId,
-          parentId,
-          parentIds: [parentId],
-        });
-      });
-
+      aliasById.set(row.id, existing.id);
+      existing.parentIds = mergeUniqueValues(existing.parentIds || [], row.parentIds || []);
+      existing.ansvar = mergeUniqueValues(existing.ansvar || [], row.ansvar || []);
+      existing.sam = mergeUniqueValues(existing.sam || [], row.sam || []);
       issues.push(
-        `Roll-ID '${row.id}' rapporterade till flera överordnade (${parentIds.join(", ")}). Noden duplicerades i schemat.`
+        `Roll-ID '${row.id}' hade samma innehåll som '${existing.id}' och slogs ihop för att undvika visuell duplicering.`
       );
     });
 
-    const byId = new Map(multiParentRows.map((row) => [row.id, row]));
+    mergedRows.forEach((row) => {
+      row.parentIds = (row.parentIds || []).map((parentId) => aliasById.get(parentId) || parentId);
+    });
 
-    multiParentRows.forEach((row) => {
+    const byId = new Map(mergedRows.map((row) => [row.id, row]));
+
+    mergedRows.forEach((row) => {
       const parentIds = Array.isArray(row.parentIds) ? row.parentIds.slice() : row.parentId ? [row.parentId] : [];
 
       if (row.parentId && row.parentId === row.id) {
@@ -665,19 +694,21 @@
 
       parentIds.forEach((parentId) => {
         if (parentId !== row.id && !byId.has(parentId)) {
-          issues.push(
-            `Roll-ID '${row.id}' rapporterade till okänd chef ('${parentId}'). Länken togs bort.`
-          );
+          issues.push(`Roll-ID '${row.id}' rapporterade till okänd chef ('${parentId}'). Länken togs bort.`);
         }
       });
 
       const validParents = parentIds.filter((parentId) => parentId !== row.id && byId.has(parentId));
-      row.parentIds = validParents;
-      row.parentId = validParents[0] || null;
+      row.parentIds = Array.from(new Set(validParents));
+      row.parentId = row.parentIds[0] || null;
 
-      if (validParents.length > 1) {
+      if (row.parentIds.length > 1) {
+        row.parentIds.slice(1).forEach((parentId) => {
+          connections.push({ from: parentId, to: row.id });
+        });
+
         issues.push(
-          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Noden duplicerades så att varje koppling ritas som en vanlig föräldralänk.`
+          `Roll-ID '${row.id}' rapporterade till flera överordnade (${row.parentIds.join(", ")}). Extra överordnade ritas som kopplingslinjer utan att noden dupliceras.`
         );
       }
     });
@@ -713,17 +744,15 @@
 
     Array.from(byId.keys()).forEach((id) => walk(id));
 
-    const hasRoot = multiParentRows.some((row) => !row.parentId);
-    if (!hasRoot && multiParentRows.length) {
-      const forcedRoot = multiParentRows[0];
-      issues.push(
-        `Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`
-      );
+    const hasRoot = mergedRows.some((row) => !row.parentId);
+    if (!hasRoot && mergedRows.length) {
+      const forcedRoot = mergedRows[0];
+      issues.push(`Ingen rotnod hittades i hierarkin. Länken för '${forcedRoot.id}' togs bort så att schemat kan ritas.`);
       forcedRoot.parentId = null;
       forcedRoot.parentIds = [];
     }
 
-    const roots = multiParentRows.filter((row) => !row.parentId);
+    const roots = mergedRows.filter((row) => !row.parentId);
     if (roots.length > 1) {
       let syntheticId = "__virtual_root__";
       while (byId.has(syntheticId)) syntheticId += "_x";
@@ -732,7 +761,7 @@
         row.parentId = syntheticId;
       });
 
-      multiParentRows.unshift({
+      mergedRows.unshift({
         id: syntheticId,
         parentId: null,
         parentIds: [],
@@ -746,15 +775,13 @@
         arbetsbeskrivning: "",
       });
 
-      issues.push(
-        `Flera rotnoder hittades (${roots.length}). En virtuell rotnod lades till så att schemat kan ritas.`
-      );
+      issues.push(`Flera rotnoder hittades (${roots.length}). En virtuell rotnod lades till så att schemat kan ritas.`);
     }
 
     return {
-      rows: multiParentRows,
+      rows: mergedRows,
       issues,
-      connections: [],
+      connections,
     };
   }
 
