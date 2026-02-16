@@ -608,7 +608,6 @@
 
   function sanitizeHierarchyRows(rows) {
     const issues = [];
-    const connections = [];
     const uniqueRows = [];
     const seen = new Set();
 
@@ -677,12 +676,8 @@
       row.parentId = validParents[0] || null;
 
       if (validParents.length > 1) {
-        validParents.slice(1).forEach((extraParentId) => {
-          connections.push({ from: extraParentId, to: row.id });
-        });
-
         issues.push(
-          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Extra kopplingar ritades som sidolänkar.`
+          `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Noden duplicerades så att varje koppling ritas som en vanlig föräldralänk.`
         );
       }
     });
@@ -759,7 +754,7 @@
     return {
       rows: multiParentRows,
       issues,
-      connections,
+      connections: [],
     };
   }
 
