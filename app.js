@@ -398,9 +398,9 @@
         const points = extractPathEndpoints(currentPath);
         if (points) {
           const { startX, startY, endX, endY } = points;
-          const gapY = endY - startY;
-          const branchY = startY + Math.max(18, Math.min(gapY - 34, gapY * 0.58));
-          const mergeY = branchY + 12;
+          const safeStartY = Math.min(startY, endY - 44);
+          const mergeY = endY - 12;
+          const branchY = Math.max(safeStartY + 20, endY - 36);
 
           finalPath = shouldDrawTrunk
             ? `M ${startX},${startY}
