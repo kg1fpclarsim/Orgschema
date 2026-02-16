@@ -609,8 +609,19 @@
   function sanitizeHierarchyRows(rows) {
     const issues = [];
     const uniqueRows = [];
-    const seen = new Set();
+    const byIdInitial = new Map();
     const connections = [];
+
+    function mergeUniqueValues(...lists) {
+      return Array.from(
+        new Set(
+          lists
+            .flat()
+            .map((value) => sanitizeIdentifier(value))
+            .filter(Boolean)
+        )
+      );
+    }
 
     (rows || []).forEach((row) => {
       if (!row || !row.id) return;
@@ -661,15 +672,6 @@
         row.parentIds.slice(1).forEach((parentId) => {
           connections.push({ from: parentId, to: row.id });
         });
-
-      if (validParents.length > 1) {
-        validParents.slice(1).forEach((parentId) => {
-          connections.push({
-            from: parentId,
-            to: row.id,
-          });
-        });
-
         issues.push(
           `Roll-ID '${row.id}' rapporterade till flera överordnade (${validParents.join(", ")}). Extra överordnade ritas som kopplingslinjer utan att noden dupliceras.`
         );
