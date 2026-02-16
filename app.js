@@ -758,8 +758,9 @@
       return;
     }
 
-    const delimiters = ["", ";", ",", "\t"];
+    const delimiters = ["", ";", ",", "\t", "|"];
     let index = 0;
+    let bestResult = null;
 
     function run() {
       const delimiter = delimiters[index++];
@@ -769,10 +770,22 @@
         skipEmptyLines: true,
         complete: (res) => {
           const rows = parseRows(res.data);
-          const hasFatalErrors = (res.errors || []).some((e) => e.code === "UndetectableDelimiter");
+          const candidate = {
+            ...res,
+            parsedRows: rows,
+          };
 
-          if (rows.length || index >= delimiters.length || !hasFatalErrors) {
-            onDone({ ...res, parsedRows: rows });
+          if (!bestResult || rows.length > (bestResult.parsedRows?.length || 0)) {
+            bestResult = candidate;
+          }
+
+          if (rows.length) {
+            onDone(candidate);
+            return;
+          }
+
+          if (index >= delimiters.length) {
+            onDone(bestResult || candidate);
             return;
           }
 
