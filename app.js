@@ -267,6 +267,40 @@
     return nodeLike?.data?.data || nodeLike?.data || nodeLike || {};
   }
 
+  function extractPathEndpoints(pathValue) {
+    const numbers = (pathValue || "")
+      .toString()
+      .match(/-?\d*\.?\d+/g)
+      ?.map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+
+    if (!numbers || numbers.length < 4) return null;
+
+    return {
+      startX: numbers[0],
+      startY: numbers[1],
+      endX: numbers[numbers.length - 2],
+      endY: numbers[numbers.length - 1],
+    };
+  }
+
+  function buildRoutedConnectionPath(pathValue) {
+    const points = extractPathEndpoints(pathValue);
+    if (!points) return pathValue;
+
+    const { startX, startY, endX, endY } = points;
+    const gapY = endY - startY;
+
+    if (!Number.isFinite(gapY) || Math.abs(gapY) < 24) return pathValue;
+
+    const laneY = startY + Math.max(18, Math.min(gapY - 18, gapY * 0.58));
+
+    return `M ${startX},${startY}
+      L ${startX},${laneY}
+      L ${endX},${laneY}
+      L ${endX},${endY}`;
+  }
+
   function renderChart() {
     els.chart.innerHTML = "";
     if (!state.finalData.length) {
@@ -311,6 +345,21 @@
       const cc = colorState.colorFor(child);
       if (!d3Api?.select) return;
       d3Api.select(this).attr("stroke", cc?.stripe || "#CBD5E1").attr("stroke-width", 2).attr("stroke-opacity", 0.55);
+    });
+
+    callIfFn(c, "connectionsUpdate", function () {
+      if (!d3Api?.select) return;
+
+      const currentPath = d3Api.select(this).attr("d");
+      const routedPath = buildRoutedConnectionPath(currentPath);
+
+      d3Api
+        .select(this)
+        .attr("d", routedPath)
+        .attr("fill", "none")
+        .attr("stroke", "#0f172a")
+        .attr("stroke-width", 1.4)
+        .attr("stroke-opacity", 0.75);
     });
 
     callIfFn(c, "buttonContent", ({ node }) => {
