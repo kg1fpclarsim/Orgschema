@@ -614,12 +614,28 @@
 
     (rows || []).forEach((row) => {
       if (!row || !row.id) return;
-      if (seen.has(row.id)) {
-        issues.push(`Dubblett av Roll-ID '${row.id}' ignorerades.`);
+      const parentIds = Array.isArray(row.parentIds) ? row.parentIds : row.parentId ? [row.parentId] : [];
+      const existing = byIdInitial.get(row.id);
+      if (existing) {
+        existing.parentIds = mergeUniqueValues(existing.parentIds || [], parentIds);
+        if (!existing.name && row.name) existing.name = row.name;
+        if (!existing.title && row.title) existing.title = row.title;
+        if (!existing.bolag && row.bolag) existing.bolag = row.bolag;
+        if (!existing.plats && row.plats) existing.plats = row.plats;
+        if (!existing.trafik && row.trafik) existing.trafik = row.trafik;
+        if (!existing.arbetsbeskrivning && row.arbetsbeskrivning) existing.arbetsbeskrivning = row.arbetsbeskrivning;
+        existing.ansvar = mergeUniqueValues(existing.ansvar || [], row.ansvar || []);
+        existing.sam = mergeUniqueValues(existing.sam || [], row.sam || []);
+        issues.push(`Dubblett av Roll-ID '${row.id}' slogs ihop till en nod.`);
         return;
       }
-      seen.add(row.id);
-      uniqueRows.push({ ...row });
+
+      const merged = {
+        ...row,
+        parentIds: mergeUniqueValues(parentIds),
+      };
+      byIdInitial.set(row.id, merged);
+      uniqueRows.push(merged);
     });
 
     const byId = new Map(uniqueRows.map((row) => [row.id, row]));
@@ -633,15 +649,18 @@
 
       parentIds.forEach((parentId) => {
         if (parentId !== row.id && !byId.has(parentId)) {
-          issues.push(
-            `Roll-ID '${row.id}' rapporterade till okänd chef ('${parentId}'). Länken togs bort.`
-          );
+          issues.push(`Roll-ID '${row.id}' rapporterade till okänd chef ('${parentId}'). Länken togs bort.`);
         }
       });
 
       const validParents = parentIds.filter((parentId) => parentId !== row.id && byId.has(parentId));
-      row.parentIds = validParents;
-      row.parentId = validParents[0] || null;
+      row.parentIds = Array.from(new Set(validParents));
+      row.parentId = row.parentIds[0] || null;
+
+      if (row.parentIds.length > 1) {
+        row.parentIds.slice(1).forEach((parentId) => {
+          connections.push({ from: parentId, to: row.id });
+        });
 
       if (validParents.length > 1) {
         validParents.slice(1).forEach((parentId) => {
@@ -721,9 +740,7 @@
         arbetsbeskrivning: "",
       });
 
-      issues.push(
-        `Flera rotnoder hittades (${roots.length}). En virtuell rotnod lades till så att schemat kan ritas.`
-      );
+      issues.push(`Flera rotnoder hittades (${roots.length}). En virtuell rotnod lades till så att schemat kan ritas.`);
     }
 
     return {
